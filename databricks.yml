@@ -1,0 +1,19 @@
+bundle:
+  name: chargeassert
+  databricks_cli_version: ">= 0.295.0"
+  engine: direct
+
+include:
+  - resources/*.yml
+
+variables:
+  catalog_name:
+    description: Existing Unity Catalog catalog that will contain the ChargeAssert layers.
+    default: workspace
+
+targets:
+  dev:
+    mode: development
+    default: true
+    presets:
+      name_prefix: chargeassert_dev_
