@@ -13,7 +13,4 @@ variables:
 
 targets:
   dev:
-    mode: development
     default: true
-    presets:
-      name_prefix: chargeassert_dev_

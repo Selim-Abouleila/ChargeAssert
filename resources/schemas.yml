@@ -1,7 +1,7 @@
 resources:
   schemas:
     bronze:
-      name: bronze
+      name: chargeassert_dev_bronze
       catalog_name: ${var.catalog_name}
       comment: Raw and immutable EV charging evidence for ChargeAssert.
       properties:
@@ -11,7 +11,7 @@ resources:
         prevent_destroy: true
 
     silver:
-      name: silver
+      name: chargeassert_dev_silver
       catalog_name: ${var.catalog_name}
       comment: Validated and normalized EV charging sessions for ChargeAssert.
       properties:
@@ -21,7 +21,7 @@ resources:
         prevent_destroy: true
 
     gold:
-      name: gold
+      name: chargeassert_dev_gold
       catalog_name: ${var.catalog_name}
       comment: Financial assertions, exposure, and release verdicts for ChargeAssert.
       properties:
