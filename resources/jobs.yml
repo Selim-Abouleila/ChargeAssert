@@ -1,0 +1,13 @@
+resources:
+  jobs:
+    create_tables:
+      name: chargeassert_dev_create_tables
+      description: Creates and verifies the first ChargeAssert managed Delta table.
+      tasks:
+        - task_key: create_run_manifest
+          sql_task:
+            warehouse_id: ${var.warehouse_id}
+            file:
+              path: ../sql/01_create_run_manifest.sql
+            parameters:
+              table_name: ${var.catalog_name}.chargeassert_dev_bronze.run_manifest
