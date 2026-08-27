@@ -8,7 +8,7 @@ ChargeAssert will use managed Delta tables inside the three Unity Catalog schema
 | Silver | `workspace.chargeassert_dev_silver` |
 | Gold | `workspace.chargeassert_dev_gold` |
 
-The schemas are deployed, but they are empty. The tables below are the minimal plan for the first complete test flow.
+The schemas are deployed. `run_manifest` and `ocpp_transaction_events_raw` now have version-controlled creation SQL and are wired into the `create_tables` Databricks job. The remaining tables below are the minimal plan for the first complete test flow.
 
 ## Bronze — preserve the evidence
 
@@ -16,8 +16,8 @@ Bronze stores the original input and candidate output without changing their mea
 
 | Table | One row represents | Important fields |
 | --- | --- | --- |
-| `run_manifest` | One deterministic test run | `run_id`, `scenario_id`, `seed`, `baseline_sha`, `candidate_sha`, `tariff_hash`, `created_at` |
-| `ocpp_events_raw` | One received OCPP event | `run_id`, `event_id`, `event_type`, `event_time`, `ingest_time`, `payload`, `payload_hash` |
+| `run_manifest` ✅ | One deterministic test run | `run_id`, `scenario_id`, `seed`, `baseline_sha`, `candidate_sha`, `tariff_hash`, `created_at` |
+| `ocpp_transaction_events_raw` ✅ | One received OCPP 2.0.1 `TransactionEvent` | `run_id`, `event_id`, `charging_station_id`, `transaction_id`, `event_type`, `sequence_number`, `event_time`, `ingest_time`, `payload`, `payload_hash` |
 | `ocpi_cdrs_raw` | One CDR returned by the candidate release | `run_id`, `cdr_id`, `session_id`, `cdr_type`, `currency`, `total_cost`, `payload`, `ingest_time` |
 | `tariffs_raw` | One input tariff version | `run_id`, `tariff_id`, `valid_from`, `valid_to`, `currency`, `payload`, `payload_hash` |
 
@@ -64,4 +64,4 @@ For the current single-user development stage, ownership is enough. Explicit lea
 
 ## Next implementation step
 
-Create these tables with version-controlled SQL, run that SQL from a Databricks job, and verify the tables in Catalog Explorer. No production data or credentials will be used.
+Deploy and run the updated `create_tables` job, then verify that the raw event table contains the deterministic `Started`, `Updated` and `Ended` rows. After that, implement the first Silver transformation: reconstruct those events into one `session_lifecycle` row. No production data or credentials will be used.
