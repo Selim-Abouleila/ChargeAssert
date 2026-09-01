@@ -33,3 +33,13 @@ resources:
             parameters:
               table_name: ${var.catalog_name}.chargeassert_dev_silver.session_lifecycle
               raw_events_table_name: ${var.catalog_name}.chargeassert_dev_bronze.ocpp_transaction_events_raw
+
+        - task_key: create_tariffs_raw
+          depends_on:
+            - task_key: create_run_manifest
+          sql_task:
+            warehouse_id: ${var.warehouse_id}
+            file:
+              path: ../sql/04_create_tariffs_raw.sql
+            parameters:
+              table_name: ${var.catalog_name}.chargeassert_dev_bronze.tariffs_raw
