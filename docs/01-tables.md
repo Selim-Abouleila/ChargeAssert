@@ -19,7 +19,7 @@ Bronze stores the original input and candidate output without changing their mea
 | `run_manifest` ✅ | One deterministic test run | `run_id`, `scenario_id`, `seed`, `baseline_sha`, `candidate_sha`, `tariff_hash`, `created_at` |
 | `ocpp_transaction_events_raw` ✅ | One received OCPP 2.0.1 `TransactionEvent` | `run_id`, `event_id`, `charging_station_id`, `transaction_id`, `event_type`, `sequence_number`, `event_time`, `ingest_time`, `payload`, `payload_hash` |
 | `ocpi_cdrs_raw` | One CDR returned by the candidate release | `run_id`, `cdr_id`, `session_id`, `cdr_type`, `currency`, `total_cost`, `payload`, `ingest_time` |
-| `tariffs_raw` | One input tariff version | `run_id`, `tariff_id`, `valid_from`, `valid_to`, `currency`, `payload`, `payload_hash` |
+| `tariffs_raw` ✅ | One input tariff version | `run_id`, `tariff_id`, `valid_from`, `valid_to`, `currency`, `payload`, `payload_hash` |
 
 ## Silver — produce trusted business records
 
@@ -27,7 +27,7 @@ Silver validates, deduplicates and normalizes the raw evidence.
 
 | Table | One row represents | Important fields |
 | --- | --- | --- |
-| `session_lifecycle` | One logical charging session in one run | `run_id`, `session_id`, `started_at`, `ended_at`, `meter_start_wh`, `meter_end_wh`, `status` |
+| `session_lifecycle` ✅ | One logical charging session in one run | `run_id`, `session_id`, `started_at`, `ended_at`, `meter_start_wh`, `meter_end_wh`, `status` |
 | `tariff_history` | One effective tariff period | `tariff_id`, `valid_from`, `valid_to`, `currency`, `price_components` |
 | `expected_ledger` | The independently calculated charge for one session | `run_id`, `session_id`, `expected_energy_kwh`, `expected_amount`, `currency`, `tariff_id` |
 | `actual_ledger` | One CDR actually returned by the candidate | `run_id`, `session_id`, `cdr_id`, `actual_energy_kwh`, `actual_amount`, `currency`, `tariff_id` |
