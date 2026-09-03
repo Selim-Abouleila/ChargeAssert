@@ -1,0 +1,45 @@
+resources:
+  jobs:
+    create_tables:
+      name: chargeassert_dev_create_tables
+      description: Creates and verifies the foundational ChargeAssert Bronze tables.
+      tasks:
+        - task_key: create_run_manifest
+          sql_task:
+            warehouse_id: ${var.warehouse_id}
+            file:
+              path: ../sql/01_create_run_manifest.sql
+            parameters:
+              table_name: ${var.catalog_name}.chargeassert_dev_bronze.run_manifest
+
+        - task_key: create_ocpp_transaction_events_raw
+          depends_on:
+            - task_key: create_run_manifest
+          sql_task:
+            warehouse_id: ${var.warehouse_id}
+            file:
+              path: ../sql/02_create_ocpp_transaction_events_raw.sql
+            parameters:
+              table_name: ${var.catalog_name}.chargeassert_dev_bronze.ocpp_transaction_events_raw
+              run_manifest_table_name: ${var.catalog_name}.chargeassert_dev_bronze.run_manifest
+
+        - task_key: create_session_lifecycle
+          depends_on:
+            - task_key: create_ocpp_transaction_events_raw
+          sql_task:
+            warehouse_id: ${var.warehouse_id}
+            file:
+              path: ../sql/03_create_session_lifecycle.sql
+            parameters:
+              table_name: ${var.catalog_name}.chargeassert_dev_silver.session_lifecycle
+              raw_events_table_name: ${var.catalog_name}.chargeassert_dev_bronze.ocpp_transaction_events_raw
+
+        - task_key: create_tariffs_raw
+          depends_on:
+            - task_key: create_run_manifest
+          sql_task:
+            warehouse_id: ${var.warehouse_id}
+            file:
+              path: ../sql/04_create_tariffs_raw.sql
+            parameters:
+              table_name: ${var.catalog_name}.chargeassert_dev_bronze.tariffs_raw

@@ -1,0 +1,31 @@
+resources:
+  schemas:
+    bronze:
+      name: chargeassert_dev_bronze
+      catalog_name: ${var.catalog_name}
+      comment: Raw and immutable EV charging evidence for ChargeAssert.
+      properties:
+        chargeassert.layer: bronze
+        chargeassert.environment: dev
+      lifecycle:
+        prevent_destroy: true
+
+    silver:
+      name: chargeassert_dev_silver
+      catalog_name: ${var.catalog_name}
+      comment: Validated and normalized EV charging sessions for ChargeAssert.
+      properties:
+        chargeassert.layer: silver
+        chargeassert.environment: dev
+      lifecycle:
+        prevent_destroy: true
+
+    gold:
+      name: chargeassert_dev_gold
+      catalog_name: ${var.catalog_name}
+      comment: Financial assertions, exposure, and release verdicts for ChargeAssert.
+      properties:
+        chargeassert.layer: gold
+        chargeassert.environment: dev
+      lifecycle:
+        prevent_destroy: true

@@ -1,0 +1,21 @@
+bundle:
+  name: chargeassert
+  databricks_cli_version: ">= 0.295.0"
+  engine: direct
+
+include:
+  - resources/*.yml
+
+variables:
+  catalog_name:
+    description: Existing Unity Catalog catalog that will contain the ChargeAssert layers.
+    default: workspace
+
+  warehouse_id:
+    description: Existing SQL warehouse used to run ChargeAssert SQL tasks.
+    lookup:
+      warehouse: Serverless Starter Warehouse
+
+targets:
+  dev:
+    default: true
