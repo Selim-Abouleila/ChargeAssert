@@ -2,7 +2,7 @@ resources:
   jobs:
     create_tables:
       name: chargeassert_dev_create_tables
-      description: Creates and verifies the foundational ChargeAssert Bronze tables.
+      description: Creates and verifies the foundational ChargeAssert Bronze and Silver tables.
       tasks:
         - task_key: create_run_manifest
           sql_task:
@@ -43,3 +43,14 @@ resources:
               path: ../sql/04_create_tariffs_raw.sql
             parameters:
               table_name: ${var.catalog_name}.chargeassert_dev_bronze.tariffs_raw
+
+        - task_key: create_tariff_history
+          depends_on:
+            - task_key: create_tariffs_raw
+          sql_task:
+            warehouse_id: ${var.warehouse_id}
+            file:
+              path: ../sql/05_create_tariff_history.sql
+            parameters:
+              table_name: ${var.catalog_name}.chargeassert_dev_silver.tariff_history
+              raw_tariffs_table_name: ${var.catalog_name}.chargeassert_dev_bronze.tariffs_raw
