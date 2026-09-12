@@ -54,3 +54,38 @@ resources:
             parameters:
               table_name: ${var.catalog_name}.chargeassert_dev_silver.tariff_history
               raw_tariffs_table_name: ${var.catalog_name}.chargeassert_dev_bronze.tariffs_raw
+
+        - task_key: create_expected_ledger
+          depends_on:
+            - task_key: create_session_lifecycle
+            - task_key: create_tariff_history
+          sql_task:
+            warehouse_id: ${var.warehouse_id}
+            file:
+              path: ../sql/06_create_expected_ledger.sql
+            parameters:
+              table_name: ${var.catalog_name}.chargeassert_dev_silver.expected_ledger
+              session_lifecycle_table_name: ${var.catalog_name}.chargeassert_dev_silver.session_lifecycle
+              tariff_history_table_name: ${var.catalog_name}.chargeassert_dev_silver.tariff_history
+
+        - task_key: create_ocpi_cdrs_raw
+          depends_on:
+            - task_key: create_run_manifest
+          sql_task:
+            warehouse_id: ${var.warehouse_id}
+            file:
+              path: ../sql/07_create_ocpi_cdrs_raw.sql
+            parameters:
+              table_name: ${var.catalog_name}.chargeassert_dev_bronze.ocpi_cdrs_raw
+              run_manifest_table_name: ${var.catalog_name}.chargeassert_dev_bronze.run_manifest
+
+        - task_key: create_actual_ledger
+          depends_on:
+            - task_key: create_ocpi_cdrs_raw
+          sql_task:
+            warehouse_id: ${var.warehouse_id}
+            file:
+              path: ../sql/08_create_actual_ledger.sql
+            parameters:
+              table_name: ${var.catalog_name}.chargeassert_dev_silver.actual_ledger
+              raw_cdrs_table_name: ${var.catalog_name}.chargeassert_dev_bronze.ocpi_cdrs_raw
