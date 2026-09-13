@@ -12,13 +12,13 @@ ChargeAssert uses managed Delta tables inside these Unity Catalog schemas:
 | Silver | `workspace.chargeassert_dev_silver` |
 | Gold | `workspace.chargeassert_dev_gold` |
 
-Eight tables now have version-controlled SQL wired into the `create_tables` job. **Implemented means code exists, not that its latest version has been deployed or successfully run.** The user confirmed the session/tariff preview in Databricks on 2026-09-06: one row with 12.500000 kWh, EUR 0.450000/kWh and EUR 5.625000000000 before rounding. A successful job output shown on 2026-09-12 still listed only the five older tasks. The `expected_ledger`, `ocpi_cdrs_raw` and `actual_ledger` tasks need deployment and execution in that workspace.
+Nine tables now have version-controlled SQL wired into the `create_tables` job. **Implemented means code exists, not that its latest version has been deployed or successfully run.** The user confirmed the session/tariff preview in Databricks on 2026-09-06: one row with 12.500000 kWh, EUR 0.450000/kWh and EUR 5.625000000000 before rounding. The latest addition is Gold `assertion_result`. A successful run of the full nine-task job has not yet been verified in the workspace.
 
 The current fixture is one run (`smoke-run-v1`), one session (`txn-smoke-v1`), three OCPP-shaped events, one EUR energy tariff, and two fixed CDR responses (one baseline and one candidate). These responses are seeded literals; a replay adapter does not exist yet. This is a foundation smoke test, not the complete release gate or the six-scenario suite.
 
 ## Bronze — preserve the evidence
 
-Bronze preserves original inputs and, once implemented, baseline and candidate outputs.
+Bronze preserves original inputs and the fixed baseline and candidate outputs.
 
 | Table | Status | One row represents | Important fields |
 | --- | --- | --- | --- |
@@ -53,7 +53,7 @@ Silver validates, deduplicates and normalizes the raw evidence.
 | `expected_ledger` | Implemented for smoke session; deployment pending | The independently calculated charge for one session | `run_id`, `session_id`, `expected_energy_kwh`, `price_per_kwh`, `expected_amount_unrounded`, `expected_amount`, `currency`, `tariff_id`, `tariff_valid_from`, `tariff_payload_hash` |
 | `actual_ledger` | Implemented for the final-CDR subset; deployment pending | One normalized CDR returned by either release | `run_id`, `release_role`, `country_code`, `party_id`, `session_id`, `cdr_id`, `cdr_type`, `started_at`, `ended_at`, `actual_energy_kwh`, `actual_duration_hours`, `actual_amount`, `currency`, `tariff_id`, `source_payload_hashes` |
 
-Fields listed for missing tables are proposed contracts, not existing columns. `actual_ledger` must preserve different CDR IDs for the same session and release. Repeated delivery of the same transport event is deduplicated; two different financial records for one billable session are preserved and reported as a business defect.
+`actual_ledger` preserves different CDR IDs for the same session and release. Repeated delivery of the same payload is deduplicated; two different financial records for one billable session are preserved and reported as a business defect by Gold.
 
 ### `tariff_history` contract
 
@@ -99,18 +99,44 @@ Local regression checks are available with:
 python -B -m unittest discover -s tests -v
 ```
 
-They exercise the production normalization SQL with SQLite adapters for parsed fields/functions, plus job wiring. They cover release/run isolation, exact and equivalent deliveries, distinct CDR preservation, conflicts, invalid inputs and fractional-cent retention. They do **not** execute Databricks `from_json`, Delta DDL or `MERGE`; the job smoke assertions still require a workspace run.
+They exercise the production normalization and assertion SELECT queries with SQLite adapters for parsed fields, timestamps, arrays/JSON and HALF_UP rounding, plus job wiring. They cover release/run isolation, exact and equivalent deliveries, distinct CDR preservation, conflicts, invalid inputs, fractional-cent retention, missing/duplicate CDR assertions, financial mismatches, oracle gaps, evidence and a faulty-candidate FAIL to corrected-candidate PASS comparison against unchanged expectations. They do **not** execute Databricks `from_json`, Spark type analysis/decimal arithmetic, Delta DDL or `MERGE`; the job smoke assertions still require a workspace run.
 
 ## Gold — make the release decision
 
-Gold will contain the explainable results read by GitHub. A dashboard is future work, not a prerequisite for the MVP.
+Gold stores explainable checks and will provide the final verdict read by GitHub. A dashboard is future work, not a prerequisite for the MVP.
 
 | Table | Status | One row represents | Important fields |
 | --- | --- | --- | --- |
-| `assertion_result` | Missing | One rule checked for one session and release | `run_id`, `release_role`, `session_id`, `assertion_id`, `expected_value`, `actual_value`, `difference`, `status`, `severity`, evidence reference |
+| `assertion_result` | Implemented; deployment pending | One rule checked for one session and release | `run_id`, `release_role`, `session_id`, `assertion_id`, `expected_value`, `actual_value`, `difference`, `status`, `severity`, `message`, `evidence` |
 | `release_verdict` | Missing | The final decision for one candidate run | `run_id`, `baseline_sha`, `candidate_sha`, `passed_assertions`, `failed_assertions`, overbilling exposure, leakage exposure, exposure assumptions, first-divergence reference, `verdict`, `created_at` |
 
 The GitHub check will read `release_verdict.verdict`: `PASS` allows the release and `FAIL` blocks it. Baseline/candidate differences must be reported alongside independent assertions, so a baseline defect cannot become an accepted expected result.
+
+### `assertion_result` contract
+
+- Sources: Silver `expected_ledger`, `actual_ledger` and `session_lifecycle`. Destination: `workspace.chargeassert_dev_gold.assertion_result`.
+- Logical key: `(run_id, release_role, session_id, assertion_id)`. Both releases are independently checked against the oracle. A matching mistake in baseline and candidate fails both; the baseline never supplies the expectation.
+- Every expected session and every completed lifecycle session produces checks for both releases, including a release with no CDR. Actual-only sessions also produce checks for the reporting release; missing expectations are failures rather than rows silently lost in a join.
+- There are **seven rules per session/release**, listed below. `status` is `PASS`, `FAIL` or `BLOCKED`; all current rules have severity `ERROR`. `BLOCKED` means a prerequisite failed, never a pass. A future verdict must reject failed/blocked checks and missing expected coverage, including a run with zero assertions.
+- `expected_value` and `actual_value` are strings so numeric and textual checks share a schema. Numeric comparisons use decimals before string conversion. `difference` is `DECIMAL(38,6)`, calculated as **actual minus expected** only for comparable numeric values. Text checks and blocked checks have a null difference. Amount differences require matching currencies; these are per-check differences, not aggregate leakage or exposure estimates.
+- Compare energy and amount exactly at their stored precision. Do not round the reported amount: expected EUR 5.63 versus reported EUR 5.625 fails with a difference of -0.005000. The oracle already applies the configured cent rounding.
+- Expected duration is elapsed lifecycle time, calculated with [`timestampdiff(MICROSECOND, started_at, ended_at)`](https://docs.databricks.com/gcp/en/sql/language-manual/functions/timestampdiff), divided by 3,600,000,000 using decimals and rounded HALF_UP to six decimal hours. Compare the reported `actual_duration_hours` exactly against that value. This is the synthetic fixture's duration contract; it does not yet distinguish charging time from pauses/parking.
+- A missing or duplicate CDR fails `final_cdr_count` and blocks the five value comparisons. No CDR is arbitrarily selected and duplicate amounts are never summed to hide the defect. Missing, duplicate or invalid oracle/lifecycle rows fail `oracle_available` and block dependent checks.
+- `evidence` is JSON with rule version, source row counts, selected tariff ID/period/hash/currency, session timestamps, and a sorted list of all actual CDR identities, reported values and Bronze payload hashes. Use the result's run/release/session keys to locate Silver records, and `(run_id, release_role, payload_hash)` to retrieve original Bronze CDRs.
+- The [Delta merge](https://docs.databricks.com/gcp/en/delta/merge) updates existing keys, inserts new keys and removes Gold results absent from the complete current source set. This is a derived snapshot over all Silver inputs, not an immutable history of evaluations. Repeating identical inputs produces the same logical rows. Bronze and Silver are not modified by this task; their existing source-deletion limitations still apply. Run-scoped incremental evaluation is future work.
+- The fixed healthy fixture must produce **14 PASS rows: seven baseline and seven candidate**. A financial FAIL/BLOCKED in another run is stored without raising a SQL exception. A successful table-creation job is not a passing release verdict. Do not mutate the healthy smoke run to inject faults: upstream fixture assertions intentionally require its original values.
+
+| `assertion_id` | What it checks |
+| --- | --- |
+| `oracle_available` | Exactly one expected ledger row and one valid completed lifecycle row are available. |
+| `final_cdr_count` | Exactly one final financial CDR exists for the completed billable session; zero means missing, more than one means duplicate. |
+| `energy_match` | Reported kWh equals independently expected kWh. |
+| `duration_match` | Reported duration equals elapsed lifecycle hours rounded to six decimals. |
+| `currency_match` | Reported currency equals the oracle currency. |
+| `tariff_match` | Reported tariff ID matches the selected tariff ID after case normalization. |
+| `amount_match` | Reported exclusive-VAT amount equals the rounded oracle amount in the same currency. |
+
+This first implementation consumes the supported final-CDR Silver contract. It does not yet compare releases directly, verify the full reported tariff version/content, compare reported start/end timestamps, report Silver parsing/conflict failures as Gold rows, or assert HTTP retry/late-event traces. The expected-ledger producer still prices only the smoke session; general scenarios need their own independent expectations. `release_verdict` and the GitHub gate remain unimplemented.
 
 ## Current job and deployment
 
@@ -123,6 +149,7 @@ create_run_manifest
   └─ create_ocpi_cdrs_raw → create_actual_ledger
 
 create_session_lifecycle + create_tariff_history → create_expected_ledger
+create_expected_ledger + create_actual_ledger → create_assertion_result
 ```
 
 From the repository root in the environment where you run the authenticated Databricks CLI (`>= 0.295.0`, as required by `databricks.yml`), first obtain the current `dev` code, then update and run the deployed job:
@@ -137,7 +164,7 @@ databricks bundle run -t dev create_tables
 
 Run these in order, continuing only if each command succeeds. `deploy` uploads the SQL and updates bundle resources; `run` executes the SQL that creates/populates the tables and checks the fixtures. The configured SQL warehouse lookup is `Serverless Starter Warehouse`. Use the same workspace authentication as the existing dev deployment.
 
-`TERMINATED SUCCESS` confirms success for the job version that was deployed. If the output lists only the five older tasks and omits `create_expected_ledger`, `create_ocpi_cdrs_raw` and `create_actual_ledger`, pull the updated `dev` branch and **deploy before running again**. A Git pull alone does not update the deployed job. The current job should contain eight tasks. Raw CDRs belong in the **Bronze** schema; the two ledgers belong in **Silver**.
+`TERMINATED SUCCESS` confirms success for the job version that was deployed. If the output omits newer tasks such as `create_assertion_result`, pull the updated `dev` branch and **deploy before running again**. A Git pull alone does not update the deployed job. The current job should contain **nine tasks**, ending with `create_assertion_result`. Raw CDRs belong in **Bronze**, the two ledgers in **Silver**, and assertion results in **Gold**.
 
 See the [Databricks bundle command reference](https://docs.databricks.com/gcp/en/dev-tools/cli/bundle-commands).
 
@@ -202,6 +229,31 @@ ORDER BY release_role;
 
 Expect **two actual rows**, one per release, each with 12.500000 kWh, 1.000000 hour and EUR 5.630000. Rerun the job: the expected ledger should still have one row, raw CDRs two rows and the actual ledger two rows for this run.
 
+Inspect the Gold checks:
+
+```sql
+SELECT
+  release_role, session_id, assertion_id,
+  expected_value, actual_value, difference, status, message
+FROM workspace.chargeassert_dev_gold.assertion_result
+WHERE run_id = 'smoke-run-v1'
+ORDER BY release_role, session_id, assertion_id;
+```
+
+Expect **14 rows, all PASS**. `amount_match` should show 5.630000 expected, 5.630000 actual and a 0.000000 difference for each release. `duration_match` should show 1.000000 hours. The two textual matches and oracle-availability check have null numeric differences.
+
+Verify the count remains stable after a second run:
+
+```sql
+SELECT release_role, status, COUNT(*) AS assertion_count
+FROM workspace.chargeassert_dev_gold.assertion_result
+WHERE run_id = 'smoke-run-v1'
+GROUP BY release_role, status
+ORDER BY release_role, status;
+```
+
+Expect `baseline / PASS / 7` and `candidate / PASS / 7`. To inspect provenance, select `evidence` from the same table for an assertion. These workspace checks remain to be run; local SQLite tests are not proof of a successful Databricks deployment.
+
 ## Remaining MVP work
 
 | Workstream | Still missing |
@@ -211,13 +263,13 @@ Expect **two actual rows**, one per release, each with 12.500000 kWh, 1.000000 h
 | Replay and fault injection | Controlled baseline/candidate mocks, identical replay inputs/IDs/timestamps, output isolation and event/retry traces that can identify the first divergence. |
 | Session validation | Select the appropriate meter measurand, normalize units/multipliers, handle meter resets, validate timestamps and sequence numbers, deduplicate transport retries, define late/missing/conflicting-event behavior, and preserve station identity when forming session keys. |
 | Tariff selection | Load multiple tariff periods in Bronze and replace the explicit smoke mapping with scenario-defined session/tariff associations. Start-time selection is implemented for the fixture; tariff-boundary pricing remains unsupported. Extend pricing only when a scenario requires it. |
-| Independent oracle | Deploy and verify the smoke `expected_ledger`, then generalize it to scenario runs and validated energy/duration. Decimal amounts and HALF_UP session-total rounding are implemented; comparison tolerances, broader scenarios and invalid-input regression coverage remain. Keep the calculation independent from the mock release implementation. |
+| Independent oracle | Deploy and verify the smoke `expected_ledger`, then generalize it to scenario runs and validated energy/duration. Decimal amounts, HALF_UP session-total rounding and explicit first-subset comparison precision are implemented; broader scenarios and invalid-input regression coverage remain. Keep the calculation independent from the mock release implementation. |
 | Actual records | Deploy and verify raw CDRs and `actual_ledger`, replace canned responses with mock/replay ingestion, and extend beyond the supported final-CDR subset. Normalization, equivalent-delivery deduplication and conflict guards are implemented; structured Gold conflict reporting, broader Session/CDR contracts and session-ID mapping remain. |
-| Assertions | Implement `assertion_result`: exactly one final CDR for a completed billable session; correct energy/duration, tariff and amount; retry/idempotency and late-event invariants. Test the baseline and candidate against the oracle as well as comparing releases. |
+| Assertions | Deploy and verify `assertion_result`. Independent checks for oracle coverage, CDR count, energy, duration, currency, tariff ID and amount are implemented with local faulty-input coverage. Add direct baseline/candidate comparison, tariff-version evidence, retry/idempotency and late-event invariants, and structured upstream-failure reporting. |
 | Verdict and evidence | Implement `release_verdict`, first-divergence evidence and separate customer overbilling/operator leakage. Include run ID, seed, SHAs, snapshot hashes and a reproduction command. |
 | Modeled exposure | Calculate defect-rate delta × assumed monthly sessions × assumed impact per affected session, expose assumptions and separate overbilling from leakage. Label projections as modeled exposure, never actual losses or proven savings. |
 | GitHub automation | Add GitHub Actions, authenticated Databricks execution, verdict retrieval, a PASS/FAIL check with evidence links, and required-check configuration for the release gate. |
-| Verification and demo | Local actual-ledger regression checks exist. Add Databricks integration tests, scenario/financial-rule coverage, deterministic full-run checks, a complete faulty-candidate FAIL → corrected-candidate PASS demonstration, and setup/replay/report documentation. The PDF's 50,000 sessions and EUR 24,380 report are illustrative, not measured results. |
+| Verification and demo | Local actual-ledger and Gold assertion regression checks exist, including faulty/corrected comparisons against unchanged expectations. Add Databricks integration tests, broader scenario coverage, deterministic full-run checks, a complete replay-to-verdict faulty-candidate FAIL → corrected-candidate PASS demonstration, and setup/replay/report documentation. The PDF's 50,000 sessions and EUR 24,380 report are illustrative, not measured results. |
 | Runtime access | Define explicit grants when introducing a separate CI/runtime identity; current development relies on schema ownership. |
 
 ### Six flagship scenarios still to implement
@@ -233,8 +285,8 @@ Expect **two actual rows**, one per release, each with 12.500000 kWh, 1.000000 h
 
 ## Next implementation step
 
-1. Pull `dev`, validate, deploy and run the eight-task foundation job above. Confirm one expected-ledger row, two raw CDR rows and two actual-ledger rows, then rerun to verify stable counts.
-2. Implement Gold `assertion_result`: compare each release's actual records against the independent expected ledger for missing/duplicate CDRs and energy, duration, currency, tariff and amount differences. Start with the healthy fixture, then a separate faulty scenario that demonstrates a failed assertion without changing expected values.
+1. Pull `dev`, validate, deploy and run the nine-task foundation job above. Confirm one expected-ledger row, two raw CDR rows, two actual-ledger rows and 14 PASS assertion rows, then rerun to verify stable counts.
+2. Implement Gold `release_verdict` to summarize the checks into a run-level decision, with explicit handling of failed, blocked, missing and upstream-error results. Include independent baseline/candidate outcomes and evidence; a successful Databricks job alone must not grant PASS.
 3. Complete one financial test flow with baseline/candidate mocks, CDR evidence, ledgers, assertions and a verdict. Show a faulty candidate failing and its correction passing identical inputs.
 4. Expand to the six scenarios, public-data ingestion, modeled exposure, GitHub gate and documented portfolio demonstration.
 

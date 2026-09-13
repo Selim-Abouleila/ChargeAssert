@@ -2,7 +2,7 @@ resources:
   jobs:
     create_tables:
       name: chargeassert_dev_create_tables
-      description: Creates and verifies the foundational ChargeAssert Bronze and Silver tables.
+      description: Creates and verifies the foundational ChargeAssert Bronze, Silver and Gold tables.
       tasks:
         - task_key: create_run_manifest
           sql_task:
@@ -89,3 +89,17 @@ resources:
             parameters:
               table_name: ${var.catalog_name}.chargeassert_dev_silver.actual_ledger
               raw_cdrs_table_name: ${var.catalog_name}.chargeassert_dev_bronze.ocpi_cdrs_raw
+
+        - task_key: create_assertion_result
+          depends_on:
+            - task_key: create_expected_ledger
+            - task_key: create_actual_ledger
+          sql_task:
+            warehouse_id: ${var.warehouse_id}
+            file:
+              path: ../sql/09_create_assertion_result.sql
+            parameters:
+              table_name: ${var.catalog_name}.chargeassert_dev_gold.assertion_result
+              expected_ledger_table_name: ${var.catalog_name}.chargeassert_dev_silver.expected_ledger
+              actual_ledger_table_name: ${var.catalog_name}.chargeassert_dev_silver.actual_ledger
+              session_lifecycle_table_name: ${var.catalog_name}.chargeassert_dev_silver.session_lifecycle
