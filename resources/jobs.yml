@@ -103,3 +103,19 @@ resources:
               expected_ledger_table_name: ${var.catalog_name}.chargeassert_dev_silver.expected_ledger
               actual_ledger_table_name: ${var.catalog_name}.chargeassert_dev_silver.actual_ledger
               session_lifecycle_table_name: ${var.catalog_name}.chargeassert_dev_silver.session_lifecycle
+
+        - task_key: create_release_verdict
+          depends_on:
+            - task_key: create_assertion_result
+          run_if: ALL_SUCCESS
+          sql_task:
+            warehouse_id: ${var.warehouse_id}
+            file:
+              path: ../sql/10_create_release_verdict.sql
+            parameters:
+              table_name: ${var.catalog_name}.chargeassert_dev_gold.release_verdict
+              run_manifest_table_name: ${var.catalog_name}.chargeassert_dev_bronze.run_manifest
+              assertion_result_table_name: ${var.catalog_name}.chargeassert_dev_gold.assertion_result
+              expected_ledger_table_name: ${var.catalog_name}.chargeassert_dev_silver.expected_ledger
+              session_lifecycle_table_name: ${var.catalog_name}.chargeassert_dev_silver.session_lifecycle
+              actual_ledger_table_name: ${var.catalog_name}.chargeassert_dev_silver.actual_ledger

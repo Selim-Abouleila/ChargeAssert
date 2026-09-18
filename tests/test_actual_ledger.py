@@ -257,6 +257,7 @@ class BundleWiringTests(unittest.TestCase):
             visit(key)
         self.assertEqual(tasks["create_actual_ledger"], ["create_ocpi_cdrs_raw"])
         self.assertEqual(tasks["create_assertion_result"], ["create_expected_ledger", "create_actual_ledger"])
+        self.assertEqual(tasks["create_release_verdict"], ["create_assertion_result"])
         self.assertEqual(set(re.findall(r"IDENTIFIER\(:(\w+)\)", SQL)), {"table_name", "raw_cdrs_table_name"})
 
 
