@@ -264,5 +264,54 @@ SELECT assert_true(
 FROM IDENTIFIER(:table_name)
 WHERE run_id = 'smoke-run-v1';
 
-SELECT * FROM IDENTIFIER(:table_name)
-WHERE run_id = 'smoke-run-v1';
+-- The intentionally faulty fixture must fail financially while the corrected
+-- fixture passes. The job succeeds when it detects the seeded defect correctly.
+SELECT assert_true(
+  COUNT(*) = 2
+    AND count_if(
+      baseline_verdict = 'PASS' AND required_assertions = 14
+        AND blocked_assertions = 0 AND missing_assertions = 0
+        AND duplicate_assertion_keys = 0 AND unexpected_assertions = 0
+        AND invalid_assertions = 0
+    ) = 2
+    AND count_if(
+      run_id = 'amount-bad-v1' AND candidate_verdict = 'FAIL' AND verdict = 'FAIL'
+        AND passed_assertions = 13 AND failed_assertions = 1
+        AND get_json_object(first_problem, '$.release_role') = 'candidate'
+        AND get_json_object(first_problem, '$.session_id') = 'txn-smoke-v1'
+        AND get_json_object(first_problem, '$.assertion_id') = 'amount_match'
+    ) = 1
+    AND count_if(
+      run_id = 'amount-fixed-v1' AND candidate_verdict = 'PASS' AND verdict = 'PASS'
+        AND passed_assertions = 14 AND failed_assertions = 0 AND first_problem IS NULL
+    ) = 1,
+  'Amount fixtures must show bad candidate FAIL (13 PASS, 1 amount FAIL) and fixed candidate PASS (14 PASS), with both baselines PASS.'
+)
+FROM IDENTIFIER(:table_name)
+WHERE run_id IN ('amount-bad-v1', 'amount-fixed-v1');
+
+SELECT assert_true(
+  COUNT(*) = 2
+    AND count_if(CAST(expected_value AS DECIMAL(18,6)) = CAST(5.63 AS DECIMAL(18,6))) = 2
+    AND count_if(
+      run_id = 'amount-bad-v1' AND status = 'FAIL'
+        AND CAST(actual_value AS DECIMAL(18,6)) = CAST(6.50 AS DECIMAL(18,6))
+        AND difference = CAST(0.87 AS DECIMAL(38,6))
+    ) = 1
+    AND count_if(
+      run_id = 'amount-fixed-v1' AND status = 'PASS'
+        AND CAST(actual_value AS DECIMAL(18,6)) = CAST(5.63 AS DECIMAL(18,6))
+        AND difference = CAST(0 AS DECIMAL(38,6))
+    ) = 1,
+  'Both amount fixtures must retain the EUR 5.63 independent expectation; bad reports EUR 6.50 (+0.87), fixed reports EUR 5.63.'
+)
+FROM IDENTIFIER(:assertion_result_table_name)
+WHERE run_id IN ('amount-bad-v1', 'amount-fixed-v1')
+  AND release_role = 'candidate' AND assertion_id = 'amount_match';
+
+SELECT run_id, baseline_verdict, candidate_verdict, verdict,
+  required_assertions, passed_assertions, failed_assertions,
+  blocked_assertions, missing_assertions, reason
+FROM IDENTIFIER(:table_name)
+WHERE run_id IN ('smoke-run-v1', 'amount-bad-v1', 'amount-fixed-v1')
+ORDER BY run_id;

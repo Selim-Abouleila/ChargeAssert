@@ -255,7 +255,10 @@ class BundleWiringTests(unittest.TestCase):
 
         for key in tasks:
             visit(key)
-        self.assertEqual(tasks["create_actual_ledger"], ["create_ocpi_cdrs_raw"])
+        self.assertEqual(tasks["create_actual_ledger"], ["create_ocpi_cdrs_raw", "seed_amount_scenarios"])
+        self.assertEqual(tasks["seed_amount_scenarios"], ["create_ocpp_transaction_events_raw", "create_tariffs_raw", "create_ocpi_cdrs_raw"])
+        self.assertIn("seed_amount_scenarios", tasks["create_session_lifecycle"])
+        self.assertIn("seed_amount_scenarios", tasks["create_tariff_history"])
         self.assertEqual(tasks["create_assertion_result"], ["create_expected_ledger", "create_actual_ledger"])
         self.assertEqual(tasks["create_release_verdict"], ["create_assertion_result"])
         self.assertEqual(set(re.findall(r"IDENTIFIER\(:(\w+)\)", SQL)), {"table_name", "raw_cdrs_table_name"})

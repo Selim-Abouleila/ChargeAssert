@@ -21,35 +21,46 @@ CREATE TABLE IF NOT EXISTS IDENTIFIER(:table_name) (
     COMMENT 'Expected EUR amount, rounded once at session total using HALF_UP to two decimals.'
 )
 USING DELTA
-COMMENT 'Independent expected session charges; first implementation covers the smoke fixture.'
+COMMENT 'Independent expected session charges for the smoke and paired amount fixtures.'
 TBLPROPERTIES (
   'chargeassert.layer' = 'silver',
   'chargeassert.environment' = 'dev'
 );
 
--- This first oracle deliberately prices only the verified smoke session.
--- A scenario-defined session-to-tariff mapping is needed before generalizing.
-SELECT assert_true(
-  COUNT(*) = 1
-    AND count_if(
-      status = 'Completed'
-        AND started_at IS NOT NULL
-        AND ended_at >= started_at
-        AND meter_start_wh >= 0
-        AND meter_end_wh >= meter_start_wh
-    ) = 1,
-  'Expected exactly one completed smoke session with valid timestamps and nondecreasing, nonnegative Wh meter readings.'
+-- The explicit input mapping covers only the three known fixtures. It does not
+-- infer an input tariff from release outputs. A general scenario registry is future work.
+WITH scenario_sessions AS (
+  SELECT 'smoke-run-v1' AS run_id, 'txn-smoke-v1' AS session_id, 'tariff-smoke-v1' AS tariff_id
+  UNION ALL SELECT 'amount-bad-v1', 'txn-smoke-v1', 'tariff-smoke-v1'
+  UNION ALL SELECT 'amount-fixed-v1', 'txn-smoke-v1', 'tariff-smoke-v1'
+), checked_sessions AS (
+  SELECT m.run_id, m.session_id, COUNT(s.run_id) AS session_rows,
+    count_if(
+      s.status = 'Completed' AND s.started_at IS NOT NULL
+        AND s.ended_at >= s.started_at
+        AND s.meter_start_wh >= 0 AND s.meter_end_wh >= s.meter_start_wh
+    ) AS valid_rows
+  FROM scenario_sessions AS m
+  LEFT JOIN IDENTIFIER(:session_lifecycle_table_name) AS s
+    ON s.run_id = m.run_id AND s.session_id = m.session_id
+  GROUP BY m.run_id, m.session_id
 )
-FROM IDENTIFIER(:session_lifecycle_table_name)
-WHERE run_id = 'smoke-run-v1'
-  AND session_id = 'txn-smoke-v1';
+SELECT assert_true(
+  COUNT(*) = 3 AND count_if(session_rows = 1 AND valid_rows = 1) = 3,
+  'Each mapped fixture must have exactly one completed session with valid timestamps and nondecreasing, nonnegative Wh readings.'
+)
+FROM checked_sessions;
 
 -- Require exactly one effective tariff. Do not let an absent or ambiguous join
 -- silently omit a billable session or create multiple expected charges.
 -- Until tariff-boundary pricing exists, the whole session must fit the period.
-SELECT assert_true(
-  COUNT(*) = 1
-    AND count_if(
+WITH scenario_sessions AS (
+  SELECT 'smoke-run-v1' AS run_id, 'txn-smoke-v1' AS session_id, 'tariff-smoke-v1' AS tariff_id
+  UNION ALL SELECT 'amount-bad-v1', 'txn-smoke-v1', 'tariff-smoke-v1'
+  UNION ALL SELECT 'amount-fixed-v1', 'txn-smoke-v1', 'tariff-smoke-v1'
+), checked_tariffs AS (
+  SELECT m.run_id, m.session_id, COUNT(t.run_id) AS tariff_rows,
+    count_if(
       t.currency = 'EUR'
         AND size(t.price_components) = 1
         AND try_element_at(t.price_components, 1).type = 'ENERGY'
@@ -57,24 +68,32 @@ SELECT assert_true(
         AND try_element_at(t.price_components, 1).step_size = 1
         AND t.source_payload_hash IS NOT NULL
         AND (t.valid_to IS NULL OR s.ended_at <= t.valid_to)
-    ) = 1,
-  'Expected exactly one flat EUR ENERGY tariff for the smoke session, with step_size=1 and a validity period covering the full session.'
+    ) AS valid_rows
+  FROM scenario_sessions AS m
+  LEFT JOIN IDENTIFIER(:session_lifecycle_table_name) AS s
+    ON s.run_id = m.run_id AND s.session_id = m.session_id
+  LEFT JOIN IDENTIFIER(:tariff_history_table_name) AS t
+    ON t.run_id = m.run_id AND t.tariff_id = m.tariff_id
+    AND s.started_at >= t.valid_from
+    AND (t.valid_to IS NULL OR s.started_at < t.valid_to)
+  GROUP BY m.run_id, m.session_id
 )
-FROM IDENTIFIER(:session_lifecycle_table_name) AS s
-JOIN IDENTIFIER(:tariff_history_table_name) AS t
-  ON t.run_id = s.run_id
-  AND t.tariff_id = 'tariff-smoke-v1'
-  AND s.started_at >= t.valid_from
-  AND (t.valid_to IS NULL OR s.started_at < t.valid_to)
-WHERE s.run_id = 'smoke-run-v1'
-  AND s.session_id = 'txn-smoke-v1';
+SELECT assert_true(
+  COUNT(*) = 3 AND count_if(tariff_rows = 1 AND valid_rows = 1) = 3,
+  'Each mapped fixture must have exactly one flat EUR ENERGY tariff, step_size=1, covering the full session.'
+)
+FROM checked_tariffs;
 
 -- Read only session evidence and tariffs, independently of release outputs.
 -- DECIMAL(18,6) * DECIMAL(18,6) yields DECIMAL(37,12); retain that product
 -- and apply HALF_UP rounding once to obtain the two-decimal EUR amount.
 MERGE INTO IDENTIFIER(:table_name) AS target
 USING (
-  WITH session_price AS (
+  WITH scenario_sessions AS (
+    SELECT 'smoke-run-v1' AS run_id, 'txn-smoke-v1' AS session_id, 'tariff-smoke-v1' AS tariff_id
+    UNION ALL SELECT 'amount-bad-v1', 'txn-smoke-v1', 'tariff-smoke-v1'
+    UNION ALL SELECT 'amount-fixed-v1', 'txn-smoke-v1', 'tariff-smoke-v1'
+  ), session_price AS (
     SELECT
       s.run_id,
       s.session_id,
@@ -87,14 +106,14 @@ USING (
         AS DECIMAL(18,6)
       ) AS expected_energy_kwh,
       try_element_at(t.price_components, 1).price AS price_per_kwh
-    FROM IDENTIFIER(:session_lifecycle_table_name) AS s
+    FROM scenario_sessions AS m
+    JOIN IDENTIFIER(:session_lifecycle_table_name) AS s
+      ON s.run_id = m.run_id AND s.session_id = m.session_id
     JOIN IDENTIFIER(:tariff_history_table_name) AS t
       ON t.run_id = s.run_id
-      AND t.tariff_id = 'tariff-smoke-v1'
+      AND t.tariff_id = m.tariff_id
       AND s.started_at >= t.valid_from
       AND (t.valid_to IS NULL OR s.started_at < t.valid_to)
-    WHERE s.run_id = 'smoke-run-v1'
-      AND s.session_id = 'txn-smoke-v1'
   ), calculated_charge AS (
     SELECT
       *,
@@ -143,7 +162,8 @@ WHEN NOT MATCHED THEN INSERT (
 
 -- Fixed expectations make the half-cent rounding decision observable.
 SELECT assert_true(
-  COUNT(*) = 1
+  COUNT(*) = 3
+    AND COUNT(DISTINCT ledger.run_id) = 3
     AND count_if(
       ledger.session_id = 'txn-smoke-v1'
         AND ledger.tariff_id = 'tariff-smoke-v1'
@@ -154,16 +174,17 @@ SELECT assert_true(
         AND ledger.price_per_kwh = CAST(0.45 AS DECIMAL(18,6))
         AND ledger.expected_amount_unrounded = CAST(5.625 AS DECIMAL(37,12))
         AND ledger.expected_amount = CAST(5.63 AS DECIMAL(18,2))
-    ) = 1,
-  'Expected one smoke ledger row: 12.5 kWh at EUR 0.45/kWh, EUR 5.625 unrounded and EUR 5.63 rounded HALF_UP, with matching tariff provenance.'
+    ) = 3,
+  'Expected three independent fixture charges: 12.5 kWh at EUR 0.45/kWh, EUR 5.625 unrounded and EUR 5.63 rounded HALF_UP, with matching tariff provenance.'
 )
 FROM IDENTIFIER(:table_name) AS ledger
 LEFT JOIN IDENTIFIER(:tariff_history_table_name) AS tariff
   ON tariff.run_id = ledger.run_id
   AND tariff.tariff_id = ledger.tariff_id
   AND tariff.valid_from = ledger.tariff_valid_from
-WHERE ledger.run_id = 'smoke-run-v1';
+WHERE ledger.run_id IN ('smoke-run-v1', 'amount-bad-v1', 'amount-fixed-v1');
 
 SELECT *
 FROM IDENTIFIER(:table_name)
-WHERE run_id = 'smoke-run-v1';
+WHERE run_id IN ('smoke-run-v1', 'amount-bad-v1', 'amount-fixed-v1')
+ORDER BY run_id;

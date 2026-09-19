@@ -26,6 +26,7 @@ resources:
         - task_key: create_session_lifecycle
           depends_on:
             - task_key: create_ocpp_transaction_events_raw
+            - task_key: seed_amount_scenarios
           sql_task:
             warehouse_id: ${var.warehouse_id}
             file:
@@ -47,6 +48,7 @@ resources:
         - task_key: create_tariff_history
           depends_on:
             - task_key: create_tariffs_raw
+            - task_key: seed_amount_scenarios
           sql_task:
             warehouse_id: ${var.warehouse_id}
             file:
@@ -79,9 +81,25 @@ resources:
               table_name: ${var.catalog_name}.chargeassert_dev_bronze.ocpi_cdrs_raw
               run_manifest_table_name: ${var.catalog_name}.chargeassert_dev_bronze.run_manifest
 
+        - task_key: seed_amount_scenarios
+          depends_on:
+            - task_key: create_ocpp_transaction_events_raw
+            - task_key: create_tariffs_raw
+            - task_key: create_ocpi_cdrs_raw
+          sql_task:
+            warehouse_id: ${var.warehouse_id}
+            file:
+              path: ../sql/11_seed_amount_scenarios.sql
+            parameters:
+              run_manifest_table_name: ${var.catalog_name}.chargeassert_dev_bronze.run_manifest
+              raw_events_table_name: ${var.catalog_name}.chargeassert_dev_bronze.ocpp_transaction_events_raw
+              raw_tariffs_table_name: ${var.catalog_name}.chargeassert_dev_bronze.tariffs_raw
+              raw_cdrs_table_name: ${var.catalog_name}.chargeassert_dev_bronze.ocpi_cdrs_raw
+
         - task_key: create_actual_ledger
           depends_on:
             - task_key: create_ocpi_cdrs_raw
+            - task_key: seed_amount_scenarios
           sql_task:
             warehouse_id: ${var.warehouse_id}
             file:
