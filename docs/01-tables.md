@@ -12,11 +12,13 @@ ChargeAssert uses managed Delta tables inside these Unity Catalog schemas:
 | Silver | `workspace.chargeassert_dev_silver` |
 | Gold | `workspace.chargeassert_dev_gold` |
 
-Ten tables now have version-controlled SQL wired into the `create_tables` job, which has twelve tasks including fixture loading and an on-demand Python mock billing generator. **Implemented means code exists, not that its latest version has been deployed or successfully run.** The user confirmed all 14 Gold smoke assertions PASS on 2026-09-18, the smoke release verdict PASS with 14/14 checks on 2026-09-19, and the paired canned fixtures on 2026-09-20: `amount-bad-v1` has baseline PASS, candidate/overall FAIL and 13 passing / 1 failing assertions; `amount-fixed-v1` has both releases/overall PASS and 14 passing / 0 failing assertions. Deployment and workspace execution of the new Python-generated runs remain to be verified.
+Twelve tables now have version-controlled SQL or Python creation code wired into the `create_tables` job, which has fifteen tasks including fixture loading, an on-demand Python mock billing generator and execution tracking. **Implemented means code exists, not that its latest version has been deployed or successfully run.** The user confirmed all 14 Gold smoke assertions PASS on 2026-09-18, the smoke release verdict PASS with 14/14 checks on 2026-09-19, and the paired canned fixtures on 2026-09-20. The Python-generated pair was confirmed in Databricks on 2026-09-21: `mock-amount-bad-v1` has baseline PASS, candidate/overall FAIL and 13 passing / 1 failing assertions; `mock-amount-fixed-v1` has both releases/overall PASS and 14 passing / 0 failing assertions. Deployment and workspace verification of the new execution-tracking tasks remain pending.
 
 The job retains three canned regression runs (`smoke-run-v1`, `amount-bad-v1`, `amount-fixed-v1`) and adds two runs with computed mock outputs (`mock-amount-bad-v1`, `mock-amount-fixed-v1`). Each has one session (`txn-smoke-v1`), the same three OCPP-shaped input events, one EUR energy tariff and two CDR responses. The Python mock calculates the reported charge from the raw meter events and tariff, while the independent Silver SQL oracle calculates the expectation separately. The candidate reports EUR 6.50 in each bad run; healthy responses report EUR 5.63. This remains a small synthetic demonstration, not the complete release gate or six-scenario suite.
 
 The generator runs once when the job is started and then exits. There is no schedule, continuous loop, HTTP server or background service.
+
+A scenario `run_id` identifies retained test evidence; a new `execution_id` identifies one Databricks job attempt evaluating it. Every complete job invocation creates its own audit record and verdict snapshots. Query the requested execution explicitly: an old `release_verdict` PASS is diagnostic data and cannot stand in for a failed or incomplete new execution.
 
 ## Bronze — preserve the evidence
 
@@ -25,11 +27,23 @@ Bronze preserves original inputs and the captured baseline and candidate outputs
 | Table | Status | One row represents | Important fields |
 | --- | --- | --- | --- |
 | `run_manifest` | Implemented | One deterministic test run | `run_id`, `scenario_id`, `seed`, `baseline_sha`, `candidate_sha`, `tariff_hash`, `created_at` |
+| `job_execution` | Implemented; workspace verification pending | One Databricks job attempt and its completion state | `execution_id`, Databricks job/run identifiers, repair count, `status`, `expected_run_ids_json`, start/finish timestamps, task states, `reason` |
 | `ocpp_transaction_events_raw` | Implemented | One received OCPP 2.0.1-shaped `TransactionEvent` | `run_id`, `event_id`, `charging_station_id`, `transaction_id`, `event_type`, `sequence_number`, `event_time`, `ingest_time`, `payload`, `payload_hash` |
 | `ocpi_cdrs_raw` | Implemented with canned fixtures and computed mock responses | One distinct CDR payload captured for one release in one run | `run_id`, `release_role`, `country_code`, `party_id`, `cdr_id`, `session_id`, `cdr_type`, `currency`, `total_cost`, `payload`, `payload_hash`, `ingest_time` |
 | `tariffs_raw` | Implemented | One input tariff version in a run | `run_id`, `tariff_id`, `valid_from`, `valid_to`, `currency`, `payload`, `payload_hash` |
 
 `release_role` (`baseline` or `candidate`) now isolates the raw CDR outputs. The two smoke responses intentionally use the same CDR ID and payload to verify that both releases retain their own evidence. The current manifest's two SHA columns alone would not provide output isolation.
+
+### `job_execution` contract
+
+- Destination: `workspace.chargeassert_dev_bronze.job_execution`; logical key: `execution_id`. This operational audit accompanies the original Bronze evidence; it is not a charging-session record.
+- `execution_id` is `<job_id>:<job_run_id>:<repair_count>`, using Databricks job context. A full new job run gets a new identifier even when all five scenario run IDs and input bytes are unchanged. Invalid or unresolved context is rejected.
+- The begin task registers `RUNNING` before the existing pipeline and freezes the five required scenario IDs in `expected_run_ids_json`: `smoke-run-v1`, `amount-bad-v1`, `amount-fixed-v1`, `mock-amount-bad-v1` and `mock-amount-fixed-v1`. This is a fixed fixture inventory, not yet a general manifest of every intended session.
+- The finish task records `SUCCEEDED` only after every required preceding task explicitly succeeded and five complete, unique snapshots exist for that execution. Otherwise it records `FAILED` with task-state evidence and a reason, then raises an error so the job reports failure. The audit status confirms upstream completion and committed snapshots; confirm the finalizer and the Databricks job itself also finish successfully before accepting a result. The deliberately faulty scenarios still have financial verdict `FAIL`.
+- A canceled job or unavailable compute can prevent finalization. Such an execution can remain `RUNNING`; if registration never happened, the requested identifier is absent. The check query labels these incomplete/missing outcomes and returns `BLOCKED`, never a previous PASS.
+- Repair attempts fail closed in this version. Start a new full job after correcting a failure; partial repairs can reuse successful tasks from an earlier attempt and do not establish complete fresh processing. The job permits only one concurrent run.
+
+The tracking code is `notebooks/execution_tracking.py`, called by `notebooks/track_execution.py` in begin, capture and finish modes. Context and task outcomes use documented [Databricks dynamic references](https://docs.databricks.com/aws/en/jobs/dynamic-value-references). The finalizer uses [All done dependencies](https://docs.databricks.com/gcp/en/jobs/run-if); it cannot guarantee a completion write if it is itself canceled or fails.
 
 ### `ocpi_cdrs_raw` contract
 
@@ -79,6 +93,7 @@ Bronze preserves original inputs and the captured baseline and candidate outputs
 - Insert-only merges and drift checks retain the first evidence, reject conflicting reuse of a run ID and keep identical reruns at one manifest, three events, one tariff and two raw CDRs per run. Changed mock code or inputs require new versioned run IDs and corresponding fixture expectations; do not rewrite existing evidence to make a rerun pass.
 - Silver independently prices all five mapped sessions. The generated bad candidate must fail only `amount_match` at +EUR 0.87; its baseline passes, and the generated fixed run has 14 passing checks. Gold decides the financial outcome; the generator never writes a PASS/FAIL decision.
 - This is one batch task per manual job execution. It requires Databricks serverless notebook/job compute in addition to the existing SQL warehouse. No extra Python packages, scheduled trigger or continuously running process are added. See the [Databricks serverless job bundle example](https://docs.databricks.com/aws/en/dev-tools/bundles/examples#job-that-uses-serverless-compute).
+- The user confirmed both generated verdicts and their 13/1 versus 14/0 assertion counts in Databricks on 2026-09-21. Execution tracking is a subsequent change and still needs its own workspace verification.
 
 ## Silver — produce trusted business records
 
@@ -88,7 +103,7 @@ Silver validates, deduplicates and normalizes the raw evidence.
 | --- | --- | --- | --- |
 | `session_lifecycle` | Implemented, happy path only | One logical charging session in one run | `run_id`, `session_id`, `started_at`, `ended_at`, `meter_start_wh`, `meter_end_wh`, `status` |
 | `tariff_history` | Implemented; smoke join verified in Databricks | One effective tariff period in one run | `run_id`, `tariff_id`, `valid_from`, `valid_to`, `currency`, `price_components`, `source_payload_hash` |
-| `expected_ledger` | Implemented for five fixture sessions; original three verified in Databricks | The independently calculated charge for one session | `run_id`, `session_id`, `expected_energy_kwh`, `price_per_kwh`, `expected_amount_unrounded`, `expected_amount`, `currency`, `tariff_id`, `tariff_valid_from`, `tariff_payload_hash` |
+| `expected_ledger` | Implemented for five fixture sessions; all five checked through Gold in Databricks | The independently calculated charge for one session | `run_id`, `session_id`, `expected_energy_kwh`, `price_per_kwh`, `expected_amount_unrounded`, `expected_amount`, `currency`, `tariff_id`, `tariff_valid_from`, `tariff_payload_hash` |
 | `actual_ledger` | Implemented for the final-CDR subset; Gold smoke checks verified | One normalized CDR returned by either release | `run_id`, `release_role`, `country_code`, `party_id`, `session_id`, `cdr_id`, `cdr_type`, `started_at`, `ended_at`, `actual_energy_kwh`, `actual_duration_hours`, `actual_amount`, `currency`, `tariff_id`, `source_payload_hashes` |
 
 `actual_ledger` preserves different CDR IDs for the same session and release. Repeated delivery of the same payload is deduplicated; two different financial records for one billable session are preserved and reported as a business defect by Gold.
@@ -139,16 +154,19 @@ python -B -m unittest discover -s tests -v
 
 They exercise production fixture-source, lifecycle, expected-charge, normalization, assertion and verdict SELECT queries with SQLite adapters for parsed fields, timestamps, arrays/JSON and HALF_UP rounding, plus job wiring. They cover release/run isolation, exact and equivalent deliveries, distinct CDR preservation, conflicts, invalid inputs, fractional-cent retention, missing/duplicate CDR assertions, financial mismatches, oracle gaps and evidence. Paired-fixture checks follow the seeded responses through the independent expected calculation and Gold decisions, verify unchanged inputs, reject missing/ambiguous oracle inputs and check repeat loading with an emulation of insert-only keys. Python mock checks exercise the executable calculation and generated outputs independently of Databricks. Verdict tests also cover missing entire releases/sessions, duplicate checks replacing missing checks, unsupported rules/roles/statuses, empty runs and missing/duplicate manifests. These checks do **not** execute a Databricks notebook, `from_json`, Spark type analysis/decimal arithmetic, Delta DDL or actual `MERGE`; workspace execution remains required.
 
+Execution tests exercise the Python publication/completion checks and the canonical SQL consumer against the existing five-run financial fixtures. They cover success followed by pre-Gold failure and a fresh success, stale verdicts, immutable snapshot conflicts, missing/duplicate evidence, incomplete task states, rejected repairs and inconsistent PASS counts. Databricks dynamic-reference resolution, scheduler behavior and the actual Spark/Delta writes still require the workspace demonstration below.
+
 ## Gold — make the release decision
 
-Gold stores explainable checks and a first run-level verdict. The GitHub integration and a dashboard are future work.
+Gold stores explainable checks, current scenario verdicts and immutable execution snapshots. The GitHub integration and a dashboard are future work.
 
 | Table | Status | One row represents | Important fields |
 | --- | --- | --- | --- |
 | `assertion_result` | Implemented; 14 smoke PASS rows verified in Databricks | One rule checked for one session and release | `run_id`, `release_role`, `session_id`, `assertion_id`, `expected_value`, `actual_value`, `difference`, `status`, `severity`, `message`, `evidence` |
-| `release_verdict` | Implemented; smoke and canned pair verified; computed mock pair pending deployment | The current decision for one run, including both release outcomes | `run_id`, manifest provenance, assertion/coverage counts, `baseline_verdict`, `candidate_verdict`, `verdict`, `reason`, `first_problem`, `evidence`, `evaluated_at` |
+| `release_verdict` | Implemented; all five fixture outcomes verified in Databricks | The current diagnostic decision for one scenario run, including both release outcomes | `run_id`, manifest provenance, assertion/coverage counts, `baseline_verdict`, `candidate_verdict`, `verdict`, `reason`, `first_problem`, `evidence`, `evaluated_at` |
+| `execution_verdict` | Implemented; workspace verification pending | An immutable scenario verdict and assertion snapshot from one job execution | `execution_id`, `run_id`, release verdicts, assertion counts, `reason`, `verdict_snapshot`, `assertions_snapshot` |
 
-The future GitHub check must require a successful current full job and a matching `release_verdict.verdict = 'PASS'` for the requested run. A failed job, missing verdict or `FAIL` verdict must block the release. Direct baseline/candidate differences still need reporting alongside the independent assertions; a shared billing defect already fails both releases against the oracle.
+The future GitHub check must require a successful current full Databricks job, a unique `job_execution.status = 'SUCCEEDED'` for that exact attempt and a matching `execution_verdict.verdict = 'PASS'` for the requested scenario. A failed/incomplete job, missing or duplicate registration/snapshot, `BLOCKED` check or financial `FAIL` must block the release. Do not fall back to the most recent successful execution or the mutable `release_verdict` table. Direct baseline/candidate differences still need reporting alongside the independent assertions; a shared billing defect already fails both releases against the oracle.
 
 ### `assertion_result` contract
 
@@ -199,16 +217,25 @@ This first implementation consumes the supported final-CDR Silver contract. It d
 
 These are different diagnostics, not mutually exclusive totals: a duplicate unexpected PASS can count as passed, duplicate and unexpected. Equal passed/required counts alone never grant PASS.
 
-**Current execution boundary:** the tables have no execution/snapshot ID or manifest inventory of intended sessions. The verdict cannot detect a session absent from every source, stale PASS assertions after an upstream failure, or a new parsing/conflict error before Gold runs. If the current full job fails or is skipped, do not consume a prior verdict as current success. `evaluated_at` alone does not prove freshness. Structured execution-error reporting, source-version binding and complete manifest coverage remain required before an automated production-style gate.
+**Current execution boundary:** `release_verdict` remains a mutable diagnostic table; `evaluated_at` alone does not prove freshness. The new `job_execution` and `execution_verdict` contract below protects reads for a specific attempt from stale PASS results after upstream failures. A general manifest inventory of intended sessions, full Silver/source versioning and isolation from external writers remain future work. A session absent from every source is not discoverable without an independently declared session inventory.
 
 The verdict provides the decision and traceable counts. Direct release comparison, event-time first-divergence traces, separate customer overbilling/operator leakage, modeled exposure and its assumptions remain future work; no invented zero monetary totals are stored.
+
+### `execution_verdict` contract
+
+- Destination: `workspace.chargeassert_dev_gold.execution_verdict`; logical key: `(execution_id, run_id)`. The capture task retains the full scenario verdict in `verdict_snapshot` and its complete assertion rows in `assertions_snapshot` as JSON, together with queryable verdicts, counts and reasons. A later evaluation does not rewrite an earlier execution's evidence.
+- Capture requires a valid `RUNNING` registration, repair count zero, all thirteen preceding tasks explicitly reporting `success`, five unique fresh scenario verdicts and complete matching assertion evidence. A skipped/excluded task is insufficient even if the scheduler allows a downstream task to run.
+- Insert-only snapshots preserve earlier evidence. Identical retries are idempotent; conflicting reuse is rejected. A normal execution produces five snapshots containing seventy assertion records in total. Both deliberate financial FAIL cases are captured alongside the three passing cases.
+- Snapshots alone are not a completion signal. Publication can write data before its task fails or is canceled. The finalizer independently requires successful capture, all other required task successes and the full snapshot set before recording `SUCCEEDED`. Readers join the snapshot to that exact successful registration.
+- [sql/12_check_execution.sql](../sql/12_check_execution.sql) is the canonical read query. Parameters are `execution_id`, scenario `run_id`, `job_execution_table_name` and `execution_verdict_table_name`. It anchors on the requested identifiers, returns one row even when registration is missing, and returns `BLOCKED` for incomplete, failed, duplicate or missing evidence.
+- This boundary assumes the retained fixture inputs are immutable and the configured job runs serially (`max_concurrent_runs: 1`). It does not version every Silver row, isolate manual/external writers, or replace checking the Databricks job's final successful state. Those limits must remain explicit when building the future GitHub gate.
 
 ## Current job and deployment
 
 The bundle resource key is `create_tables`; the workspace job name is `chargeassert_dev_create_tables`.
 
 ```text
-create_run_manifest
+begin_execution → create_run_manifest
   ├─ create_ocpp_transaction_events_raw
   ├─ create_tariffs_raw
   └─ create_ocpi_cdrs_raw
@@ -220,6 +247,8 @@ generate_mock_billing → create_session_lifecycle + create_tariff_history + cre
 create_session_lifecycle + create_tariff_history → create_expected_ledger
 create_expected_ledger + create_actual_ledger → create_assertion_result
 create_assertion_result → create_release_verdict
+all thirteen preceding tasks → capture_execution
+all fourteen preceding tasks → finish_execution (ALL_DONE)
 ```
 
 From the repository root in the environment where you run the authenticated Databricks CLI (`>= 0.295.0`, as required by `databricks.yml`), first obtain the current `dev` code, then update and run the deployed job:
@@ -232,13 +261,130 @@ databricks bundle deploy -t dev
 databricks bundle run -t dev create_tables
 ```
 
-Run these in order, continuing only if each command succeeds. `deploy` uploads the SQL, notebook and Python helper and updates bundle resources; `run` creates/populates the tables, executes the mock once and checks the fixtures through Gold. The SQL tasks use the configured `Serverless Starter Warehouse`; the new Python notebook task uses serverless job compute, which must be enabled and available to the job's runtime identity. Use the same workspace authentication as the existing dev deployment.
+Run these in order, continuing only if each command succeeds. `deploy` uploads the SQL, notebooks and Python helpers and updates bundle resources; `run` registers a new execution, creates/populates the fixture tables, executes the mock once, checks the fixtures through Gold and records execution snapshots/completion. The SQL tasks use the configured `Serverless Starter Warehouse`; the mock and tracking notebook tasks use serverless job compute, which must be enabled and available to the job's runtime identity. Use the same workspace authentication as the existing dev deployment.
 
-`TERMINATED SUCCESS` confirms success for the job version that was deployed. If the output omits `generate_mock_billing`, pull the updated `dev` branch and **deploy before running again**. A Git pull alone does not update the deployed job. The current job should contain **twelve tasks**, including the seed and mock tasks before Silver and `create_release_verdict` at the end. It loads and evaluates all five fixture runs automatically; no manual table inserts or new CLI parameters are needed. The generator stops when its task finishes; another run happens only when the job is started again.
+`TERMINATED SUCCESS` confirms success for the job version that was deployed. The current job should contain **fifteen tasks**, including `begin_execution`, `capture_execution` and `finish_execution`. If any is absent, pull the updated `dev` branch and **deploy before running again**. A Git pull alone does not update the deployed job. It loads and evaluates all five fixture runs automatically; normal runs need no manual table inserts or parameter overrides. `fail_before_gold` defaults to `false`; use `true` only for the failure demonstration below. The generator and tracking tasks stop when the invocation finishes; another run happens only when the job is started again.
 
 See the [Databricks bundle command reference](https://docs.databricks.com/gcp/en/dev-tools/cli/bundle-commands).
 
-After the job succeeds, inspect the expected ledger in Databricks SQL:
+### Check the requested execution
+
+First inspect the execution audit in Databricks SQL and find the row matching the job/run identifiers from the invocation you just started:
+
+```sql
+SELECT execution_id, status, reason
+FROM workspace.chargeassert_dev_bronze.job_execution
+ORDER BY started_at DESC
+LIMIT 20;
+```
+
+Copy that exact `execution_id`; do not select a different execution because it succeeded. If the requested invocation has no row, construct its `<job_id>:<job_run_id>:0` identifier from the Databricks run details and check it anyway. A missing registration is an incomplete outcome, not permission to use an older PASS.
+
+Run [sql/12_check_execution.sql](../sql/12_check_execution.sql) in SQL Editor with these parameter values:
+
+| Parameter | Value |
+| --- | --- |
+| `execution_id` | Exact identifier for the requested job attempt |
+| `run_id` | `mock-amount-fixed-v1` (or another intended fixture) |
+| `job_execution_table_name` | `workspace.chargeassert_dev_bronze.job_execution` |
+| `execution_verdict_table_name` | `workspace.chargeassert_dev_gold.execution_verdict` |
+
+For a successful full job, expect `execution_status = 'SUCCEEDED'`, financial `PASS` and 14/0 counts for the fixed mock, and financial `FAIL` with 13/1 counts for the bad mock. A failed or incomplete execution must return financial `BLOCKED`, with null release verdicts/counts. A missing execution returns `execution_status = 'MISSING'`. Duplicate registration or snapshot rows also block the check.
+
+The SQL below is the same anchored check with the default development table paths. Bind `:execution_id` and `:run_id` in SQL Editor:
+
+```sql
+-- Bind the exact execution_id returned for the requested Databricks job attempt.
+-- Never substitute the most recent successful execution for a failed/missing one.
+-- This query always returns one row, including when registration never happened.
+WITH requested AS (
+  SELECT CAST(:execution_id AS STRING) AS execution_id, CAST(:run_id AS STRING) AS run_id
+), executions AS (
+  SELECT execution_id, COUNT(*) AS execution_rows,
+    MAX(status) AS execution_status, MAX(reason) AS execution_reason
+  FROM workspace.chargeassert_dev_bronze.job_execution
+  WHERE execution_id = :execution_id
+  GROUP BY execution_id
+), snapshots AS (
+  SELECT execution_id, run_id, COUNT(*) AS snapshot_rows,
+    MAX(baseline_verdict) AS baseline_verdict,
+    MAX(candidate_verdict) AS candidate_verdict,
+    MAX(verdict) AS verdict, MAX(reason) AS reason,
+    MAX(required_assertions) AS required_assertions,
+    MAX(passed_assertions) AS passed_assertions,
+    MAX(failed_assertions) AS failed_assertions,
+    MAX(blocked_assertions) AS blocked_assertions,
+    MAX(missing_assertions) AS missing_assertions,
+    MAX(duplicate_assertion_keys) AS duplicate_assertion_keys,
+    MAX(unexpected_assertions) AS unexpected_assertions,
+    MAX(invalid_assertions) AS invalid_assertions
+  FROM workspace.chargeassert_dev_gold.execution_verdict
+  WHERE execution_id = :execution_id AND run_id = :run_id
+  GROUP BY execution_id, run_id
+), checked AS (
+  SELECT r.execution_id, r.run_id,
+    COALESCE(e.execution_rows, 0) AS execution_rows,
+    COALESCE(s.snapshot_rows, 0) AS snapshot_rows,
+    e.execution_status, e.execution_reason,
+    s.baseline_verdict, s.candidate_verdict, s.verdict, s.reason,
+    s.passed_assertions, s.failed_assertions,
+    CASE WHEN e.execution_rows = 1 AND e.execution_status = 'SUCCEEDED'
+      AND s.snapshot_rows = 1
+      AND s.baseline_verdict IN ('PASS', 'FAIL')
+      AND s.candidate_verdict IN ('PASS', 'FAIL')
+      AND s.verdict IN ('PASS', 'FAIL')
+      AND (s.verdict <> 'PASS' OR (
+        s.baseline_verdict = 'PASS' AND s.candidate_verdict = 'PASS'
+        AND s.required_assertions > 0 AND s.passed_assertions = s.required_assertions
+        AND s.failed_assertions = 0 AND s.blocked_assertions = 0
+        AND s.missing_assertions = 0 AND s.duplicate_assertion_keys = 0
+        AND s.unexpected_assertions = 0 AND s.invalid_assertions = 0
+      ))
+    THEN 1 ELSE 0 END AS usable
+  FROM requested AS r
+  LEFT JOIN executions AS e ON e.execution_id = r.execution_id
+  LEFT JOIN snapshots AS s ON s.execution_id = r.execution_id AND s.run_id = r.run_id
+)
+SELECT execution_id, run_id,
+  CASE WHEN execution_rows = 0 THEN 'MISSING'
+    WHEN execution_rows <> 1 THEN 'INVALID' ELSE execution_status END AS execution_status,
+  CASE WHEN usable = 1 THEN baseline_verdict END AS baseline_verdict,
+  CASE WHEN usable = 1 THEN candidate_verdict END AS candidate_verdict,
+  CASE WHEN usable = 1 THEN verdict ELSE 'BLOCKED' END AS verdict,
+  CASE WHEN usable = 1 THEN passed_assertions END AS passed_assertions,
+  CASE WHEN usable = 1 THEN failed_assertions END AS failed_assertions,
+  CASE WHEN execution_rows <> 1 THEN 'No unique registration for the requested execution.'
+    WHEN execution_status IS NULL OR execution_status <> 'SUCCEEDED'
+      THEN concat('Execution is incomplete or failed: ', COALESCE(execution_reason, 'No completion recorded.'))
+    WHEN snapshot_rows <> 1 THEN 'No unique verdict snapshot for this execution and scenario.'
+    WHEN usable = 0 THEN 'Invalid financial verdict snapshot.'
+    ELSE reason END AS reason
+FROM checked;
+```
+
+### Prove that an old PASS cannot replace a failed execution
+
+1. Start a normal full job (A), retain its exact execution ID and check the fixed mock: execution `SUCCEEDED`, financial `PASS`.
+2. Start a separate full job (B) with the deliberate pre-Gold failure:
+
+   ```powershell
+   databricks bundle run -t dev create_tables --params fail_before_gold=true
+   ```
+
+   The assertion task fails before modifying Gold. Expect a CLI/job error, a `FAILED` audit record for B when the finalizer runs, and no snapshots for B. Check **B's identifier**: the result must be `BLOCKED` even though A's historical snapshot and the old mutable Gold PASS remain. If finalization is interrupted, `RUNNING`/`MISSING` must still block.
+3. Start a new full job (C) with the default parameter:
+
+   ```powershell
+   databricks bundle run -t dev create_tables
+   ```
+
+   Expect a new successful execution with five snapshots and the original fixture outcomes. A's snapshots remain unchanged; B remains a failed/incomplete attempt. Use a new full job, not Repair or a selected subset of tasks.
+
+The failure parameter is a controlled execution test; it does not corrupt raw evidence or change the expected financial fixture outcomes. [Databricks `--params`](https://docs.databricks.com/aws/en/dev-tools/cli/bundle-commands#pass-job-parameters) passes job parameters for that invocation only. This A/B/C workspace demonstration remains pending until run on the deployed fifteen-task job.
+
+### Inspect the current diagnostic tables
+
+The queries below explain the retained fixture data. They read mutable current tables and do **not** replace the exact-execution check above. After a successful full job, inspect the expected ledger:
 
 ```sql
 SELECT
@@ -379,7 +525,7 @@ ORDER BY run_id;
 
 The bad candidate must show **5.630000 expected / 6.500000 actual / +0.870000 / FAIL**; the corrected candidate must show **5.630000 / 5.630000 / 0.000000 / PASS**. Both baselines remain PASS. The user confirmed the canned pair's verdicts and 13/1 versus 14/0 assertion counts in Databricks on 2026-09-20.
 
-Inspect the **new Python-generated runs** after deploying and running the twelve-task job:
+Inspect the **Python-generated runs** in the current diagnostic verdict table:
 
 ```sql
 SELECT run_id, baseline_verdict, candidate_verdict, verdict,
@@ -403,9 +549,11 @@ WHERE run_id IN ('mock-amount-bad-v1', 'mock-amount-fixed-v1')
 ORDER BY run_id, release_role;
 ```
 
-Expect four rows. Only `mock-amount-bad-v1 / candidate` should show **5.630000 expected / 6.500000 actual / +0.870000 / FAIL**. The other three rows should show **5.630000 / 5.630000 / 0.000000 / PASS**. Query Bronze `ocpi_cdrs_raw` with these run IDs to inspect the generated `cdr-mock-v1` bodies and payload hashes. Workspace confirmation of these new results is still pending; local tests do not confirm deployment.
+Expect four rows. Only `mock-amount-bad-v1 / candidate` should show **5.630000 expected / 6.500000 actual / +0.870000 / FAIL**. The other three rows should show **5.630000 / 5.630000 / 0.000000 / PASS**. Query Bronze `ocpi_cdrs_raw` with these run IDs to inspect the generated `cdr-mock-v1` bodies and payload hashes. The user confirmed the generated pair's verdicts and 13/1 versus 14/0 counts on 2026-09-21; the new execution-tracking deployment and failure demonstration remain pending.
 
 For all five fixture runs combined, expect 5 manifests, 15 raw events, 5 raw tariffs, 10 raw CDRs, 5 lifecycle rows, 5 tariff-history rows, 5 expected-ledger rows, 10 actual-ledger rows, 70 assertion rows and 5 verdict rows. Filter counts to the five fixture run IDs if other data exists. Rerun the full job with identical code and inputs: these counts and raw payload hashes should remain stable, and both bad responses and their FAIL verdicts should remain present. `evaluated_at` may advance. A drift error requires investigating the changed input/code and using new versioned run IDs for an intentional change.
+
+Execution history intentionally grows: each successful new full job adds one `job_execution` row and five `execution_verdict` snapshots containing seventy assertion records as JSON. Identical retries within one attempt do not add duplicate snapshots. A pre-Gold failure adds its audit record but no verdict snapshots; interrupted registration/finalization remains an incomplete outcome. The original ten fixture-table counts above are unchanged by execution tracking.
 
 ## Remaining MVP work
 
@@ -419,10 +567,10 @@ For all five fixture runs combined, expect 5 manifests, 15 raw events, 5 raw tar
 | Independent oracle | Generalize beyond the five mapped fixtures to validated scenario energy/duration. Decimal amounts, HALF_UP session-total rounding, per-session input guards and explicit comparison precision are implemented; broader scenarios remain. Keep the SQL calculation independent from the Python mock implementation. |
 | Actual records | Extend computed mock ingestion to external replay and beyond the supported final-CDR subset. Normalization, equivalent-delivery deduplication and conflict guards are implemented; structured Gold conflict reporting, broader Session/CDR contracts and session-ID mapping remain. The original canned fixtures remain regression evidence. |
 | Assertions | The healthy 14-check smoke result is verified in Databricks; independent oracle, CDR count, energy, duration, currency, tariff ID and amount checks have local faulty-input coverage. Add direct baseline/candidate comparison, tariff-version evidence, retry/idempotency and late-event invariants, and structured upstream-failure reporting. |
-| Verdict and evidence | Verify the new computed mock outcomes in Databricks. Add execution/snapshot binding, manifest session inventory, upstream-error outcomes, first-divergence traces and separate customer overbilling/operator leakage. Mock fingerprints identify module/behavior, not executed Git release builds. |
+| Verdict and evidence | Verify execution tracking and the A/B/C failure demonstration in Databricks. Execution registration, immutable verdict/assertion snapshots and upstream-failure blocking are implemented for the fixed five-scenario inventory. General manifest session inventory, full source/Silver version binding, external-write isolation, first-divergence traces and separate customer overbilling/operator leakage remain. Mock fingerprints identify module/behavior, not executed Git release builds. |
 | Modeled exposure | Calculate defect-rate delta × assumed monthly sessions × assumed impact per affected session, expose assumptions and separate overbilling from leakage. Label projections as modeled exposure, never actual losses or proven savings. |
-| GitHub automation | Add GitHub Actions, authenticated Databricks execution, verdict retrieval, a PASS/FAIL check with evidence links, and required-check configuration for the release gate. |
-| Verification and demo | The canned pair's FAIL → PASS outcomes are verified in Databricks; the new executable mock pair still needs workspace deployment, outcome verification and a repeat-run check. Add Databricks integration tests, broader scenarios and deterministic full-run checks. The PDF's 50,000 sessions and EUR 24,380 report are illustrative, not measured results. |
+| GitHub automation | Add GitHub Actions, authenticated Databricks execution, exact execution/scenario retrieval, a PASS/FAIL check with evidence links, and required-check configuration for the release gate. Require final Databricks job success as well as a successful execution registration and passing snapshot; never fall back to a previous success. |
+| Verification and demo | Both canned and executable mock FAIL → PASS outcomes are verified in Databricks. The new execution boundary needs deployment, the A/B/C failure proof and interrupted/partial-run checks. Repeat-run stability, Databricks integration tests, broader scenarios and deterministic full-run checks remain. The PDF's 50,000 sessions and EUR 24,380 report are illustrative, not measured results. |
 | Runtime access | Define explicit grants when introducing a separate CI/runtime identity; current development relies on schema ownership. |
 
 ### Six flagship scenarios still to implement
@@ -438,9 +586,9 @@ For all five fixture runs combined, expect 5 manifests, 15 raw events, 5 raw tar
 
 ## Next implementation step
 
-1. Pull `dev`, validate, deploy and run the twelve-task job above. Confirm the new `mock-amount-bad-v1` candidate FAIL (13/1), `mock-amount-fixed-v1` PASS (14/0), unchanged original fixtures and +EUR 0.87 on the generated bad amount check. Rerun identical code/inputs to verify stable counts and retained evidence.
-2. Bind outputs to the current execution and complete manifest session coverage, capture upstream-error results, and add replay evidence/reproduction instructions before relying on an automated release gate. A prior PASS must never stand in for a failed or incomplete current run.
-3. Expand to the six scenarios, seeded event generation, HTTP replay, public-data ingestion, modeled exposure, GitHub gate and documented portfolio demonstration.
+1. Pull `dev`, validate, deploy and run the fifteen-task job above. Verify the exact execution's five snapshots and unchanged financial fixture outcomes. Perform the A/B/C failure demonstration: the failed B execution must return `BLOCKED` even while A's PASS remains stored. Confirm another full job succeeds without rewriting earlier snapshots.
+2. Add the missing-CDR scenario through the generator, preserving the same independent expectation. Exercise the existing `final_cdr_count` assertion with a completed billable session and no candidate final CDR; the candidate must fail and dependent value comparisons must be blocked.
+3. Generalize the scenario/session inventory, strengthen session validation and source version binding, then expand to the other five scenarios, seeded event generation, HTTP replay, public-data ingestion, modeled exposure, GitHub gate and documented portfolio demonstration.
 
 Real card/payment processing, bank/PSP/ERP/settlement integration, full OCPP/OCPI certification, production monitoring/recovery, every tariff/tax/currency, machine learning and confidential operator data remain outside the MVP.
 

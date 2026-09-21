@@ -245,15 +245,29 @@ class BundleWiringTests(unittest.TestCase):
                 path = re.search(r"(?m)^              path: (.+)$", block).group(1)
                 source = (ROOT / "resources" / path).read_text(encoding="utf-8")
                 params = set(re.findall(r"(?m)^              (\w+): ", block.split("            parameters:\n")[1]))
-                self.assertEqual(params, set(re.findall(r"IDENTIFIER\(:(\w+)\)", source)), key)
+                unquoted = re.sub(r"'(?:''|[^'])*'|--[^\n]*", "", source)
+                self.assertEqual(params, set(re.findall(r":([A-Za-z_]\w*)", unquoted)), key)
             else:
-                self.assertEqual(key, "generate_mock_billing")
+                self.assertIn(key, ("generate_mock_billing", "begin_execution", "capture_execution", "finish_execution"))
                 path = re.search(r"(?m)^            notebook_path: (.+)$", block).group(1)
                 source = (ROOT / "resources" / path).read_text(encoding="utf-8")
                 self.assertTrue(source.startswith("# Databricks notebook source"))
                 params = set(re.findall(r"(?m)^              (\w+): ", block.split("            base_parameters:\n")[1]))
-                self.assertEqual(params, {"run_manifest_table_name", "raw_events_table_name", "raw_tariffs_table_name", "raw_cdrs_table_name"})
-                self.assertTrue((ROOT / "notebooks/mock_billing.py").is_file())
+                if key == "generate_mock_billing":
+                    self.assertEqual(params, {"run_manifest_table_name", "raw_events_table_name", "raw_tariffs_table_name", "raw_cdrs_table_name"})
+                    self.assertTrue((ROOT / "notebooks/mock_billing.py").is_file())
+                else:
+                    self.assertEqual(params, {"mode", "job_id", "job_run_id", "repair_count", "job_execution_table_name", "execution_verdict_table_name", "release_verdict_table_name", "assertion_result_table_name", "task_states_json"})
+                    self.assertIn(f"              mode: {key.split('_')[0]}", block)
+                    for name, reference in (("job_id", "job.id"), ("job_run_id", "job.run_id"), ("repair_count", "job.repair_count")):
+                        self.assertIn(f'{name}: "{{{{{reference}}}}}"', block)
+                    if key != "begin_execution":
+                        states = json.loads(block.split("              task_states_json: >-\n")[1].split("\n\n")[0])
+                        dependencies = re.findall(r"(?m)^            - task_key: (.+)$", block)
+                        self.assertEqual(set(states), set(dependencies))
+                        for task, reference in states.items():
+                            self.assertEqual(reference, "{{tasks." + task + ".result_state}}")
+                    self.assertTrue((ROOT / "notebooks/execution_tracking.py").is_file())
                 self.assertNotRegex(block, r"(?m)^          (?:new_cluster|existing_cluster_id|job_cluster_key):")
             tasks[key] = re.findall(r"(?m)^            - task_key: (.+)$", block)
 
@@ -275,6 +289,16 @@ class BundleWiringTests(unittest.TestCase):
         self.assertNotRegex(text, r"(?m)^      (?:schedule|trigger|continuous):")
         self.assertEqual(tasks["create_assertion_result"], ["create_expected_ledger", "create_actual_ledger"])
         self.assertEqual(tasks["create_release_verdict"], ["create_assertion_result"])
+        self.assertEqual(tasks["begin_execution"], [])
+        self.assertEqual(tasks["create_run_manifest"], ["begin_execution"])
+        self.assertEqual(set(tasks["capture_execution"]), set(tasks) - {"capture_execution", "finish_execution"})
+        self.assertEqual(set(tasks["finish_execution"]), set(tasks) - {"finish_execution"})
+        from notebooks.execution_tracking import CAPTURE_TASKS, FINISH_TASKS
+        self.assertEqual(set(tasks["capture_execution"]), set(CAPTURE_TASKS))
+        self.assertEqual(set(tasks["finish_execution"]), set(FINISH_TASKS))
+        finalizer = text.split("        - task_key: finish_execution\n")[1]
+        self.assertIn("          run_if: ALL_DONE", finalizer)
+        self.assertIn('        - name: fail_before_gold\n          default: "false"', text)
         self.assertEqual(set(re.findall(r"IDENTIFIER\(:(\w+)\)", SQL)), {"table_name", "raw_cdrs_table_name"})
 
 

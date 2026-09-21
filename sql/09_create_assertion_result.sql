@@ -1,3 +1,10 @@
+-- Opt-in operational failure test. Stop before writing Gold so an older PASS
+-- remains present and the execution-specific consumer can prove it blocks it.
+SELECT assert_true(
+  :fail_before_gold = 'false',
+  'Deliberate pre-Gold failure (or invalid fail_before_gold value); use false for a normal full run.'
+);
+
 CREATE TABLE IF NOT EXISTS IDENTIFIER(:table_name) (
   run_id STRING NOT NULL,
   release_role STRING NOT NULL,
