@@ -2,7 +2,8 @@ resources:
   jobs:
     create_tables:
       name: chargeassert_dev_create_tables
-      description: Creates and verifies the foundational ChargeAssert Bronze, Silver and Gold tables.
+      description: Creates the ChargeAssert tables, runs one deterministic mock billing replay, and verifies Bronze, Silver and Gold.
+      max_concurrent_runs: 1
       tasks:
         - task_key: create_run_manifest
           sql_task:
@@ -27,6 +28,7 @@ resources:
           depends_on:
             - task_key: create_ocpp_transaction_events_raw
             - task_key: seed_amount_scenarios
+            - task_key: generate_mock_billing
           sql_task:
             warehouse_id: ${var.warehouse_id}
             file:
@@ -49,6 +51,7 @@ resources:
           depends_on:
             - task_key: create_tariffs_raw
             - task_key: seed_amount_scenarios
+            - task_key: generate_mock_billing
           sql_task:
             warehouse_id: ${var.warehouse_id}
             file:
@@ -96,10 +99,24 @@ resources:
               raw_tariffs_table_name: ${var.catalog_name}.chargeassert_dev_bronze.tariffs_raw
               raw_cdrs_table_name: ${var.catalog_name}.chargeassert_dev_bronze.ocpi_cdrs_raw
 
+        # Omitting a cluster makes this notebook task use serverless compute.
+        # It runs once per invocation; this job has no schedule or trigger.
+        - task_key: generate_mock_billing
+          depends_on:
+            - task_key: seed_amount_scenarios
+          notebook_task:
+            notebook_path: ../notebooks/generate_mock_billing.py
+            base_parameters:
+              run_manifest_table_name: ${var.catalog_name}.chargeassert_dev_bronze.run_manifest
+              raw_events_table_name: ${var.catalog_name}.chargeassert_dev_bronze.ocpp_transaction_events_raw
+              raw_tariffs_table_name: ${var.catalog_name}.chargeassert_dev_bronze.tariffs_raw
+              raw_cdrs_table_name: ${var.catalog_name}.chargeassert_dev_bronze.ocpi_cdrs_raw
+
         - task_key: create_actual_ledger
           depends_on:
             - task_key: create_ocpi_cdrs_raw
             - task_key: seed_amount_scenarios
+            - task_key: generate_mock_billing
           sql_task:
             warehouse_id: ${var.warehouse_id}
             file:

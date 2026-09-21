@@ -21,18 +21,20 @@ CREATE TABLE IF NOT EXISTS IDENTIFIER(:table_name) (
     COMMENT 'Expected EUR amount, rounded once at session total using HALF_UP to two decimals.'
 )
 USING DELTA
-COMMENT 'Independent expected session charges for the smoke and paired amount fixtures.'
+COMMENT 'Independent expected session charges for the smoke, canned amount and executable mock fixtures.'
 TBLPROPERTIES (
   'chargeassert.layer' = 'silver',
   'chargeassert.environment' = 'dev'
 );
 
--- The explicit input mapping covers only the three known fixtures. It does not
+-- The explicit input mapping covers only the five known fixtures. It does not
 -- infer an input tariff from release outputs. A general scenario registry is future work.
 WITH scenario_sessions AS (
   SELECT 'smoke-run-v1' AS run_id, 'txn-smoke-v1' AS session_id, 'tariff-smoke-v1' AS tariff_id
   UNION ALL SELECT 'amount-bad-v1', 'txn-smoke-v1', 'tariff-smoke-v1'
   UNION ALL SELECT 'amount-fixed-v1', 'txn-smoke-v1', 'tariff-smoke-v1'
+  UNION ALL SELECT 'mock-amount-bad-v1', 'txn-smoke-v1', 'tariff-smoke-v1'
+  UNION ALL SELECT 'mock-amount-fixed-v1', 'txn-smoke-v1', 'tariff-smoke-v1'
 ), checked_sessions AS (
   SELECT m.run_id, m.session_id, COUNT(s.run_id) AS session_rows,
     count_if(
@@ -46,7 +48,7 @@ WITH scenario_sessions AS (
   GROUP BY m.run_id, m.session_id
 )
 SELECT assert_true(
-  COUNT(*) = 3 AND count_if(session_rows = 1 AND valid_rows = 1) = 3,
+  COUNT(*) = 5 AND count_if(session_rows = 1 AND valid_rows = 1) = 5,
   'Each mapped fixture must have exactly one completed session with valid timestamps and nondecreasing, nonnegative Wh readings.'
 )
 FROM checked_sessions;
@@ -58,6 +60,8 @@ WITH scenario_sessions AS (
   SELECT 'smoke-run-v1' AS run_id, 'txn-smoke-v1' AS session_id, 'tariff-smoke-v1' AS tariff_id
   UNION ALL SELECT 'amount-bad-v1', 'txn-smoke-v1', 'tariff-smoke-v1'
   UNION ALL SELECT 'amount-fixed-v1', 'txn-smoke-v1', 'tariff-smoke-v1'
+  UNION ALL SELECT 'mock-amount-bad-v1', 'txn-smoke-v1', 'tariff-smoke-v1'
+  UNION ALL SELECT 'mock-amount-fixed-v1', 'txn-smoke-v1', 'tariff-smoke-v1'
 ), checked_tariffs AS (
   SELECT m.run_id, m.session_id, COUNT(t.run_id) AS tariff_rows,
     count_if(
@@ -79,7 +83,7 @@ WITH scenario_sessions AS (
   GROUP BY m.run_id, m.session_id
 )
 SELECT assert_true(
-  COUNT(*) = 3 AND count_if(tariff_rows = 1 AND valid_rows = 1) = 3,
+  COUNT(*) = 5 AND count_if(tariff_rows = 1 AND valid_rows = 1) = 5,
   'Each mapped fixture must have exactly one flat EUR ENERGY tariff, step_size=1, covering the full session.'
 )
 FROM checked_tariffs;
@@ -93,6 +97,8 @@ USING (
     SELECT 'smoke-run-v1' AS run_id, 'txn-smoke-v1' AS session_id, 'tariff-smoke-v1' AS tariff_id
     UNION ALL SELECT 'amount-bad-v1', 'txn-smoke-v1', 'tariff-smoke-v1'
     UNION ALL SELECT 'amount-fixed-v1', 'txn-smoke-v1', 'tariff-smoke-v1'
+    UNION ALL SELECT 'mock-amount-bad-v1', 'txn-smoke-v1', 'tariff-smoke-v1'
+    UNION ALL SELECT 'mock-amount-fixed-v1', 'txn-smoke-v1', 'tariff-smoke-v1'
   ), session_price AS (
     SELECT
       s.run_id,
@@ -162,8 +168,8 @@ WHEN NOT MATCHED THEN INSERT (
 
 -- Fixed expectations make the half-cent rounding decision observable.
 SELECT assert_true(
-  COUNT(*) = 3
-    AND COUNT(DISTINCT ledger.run_id) = 3
+  COUNT(*) = 5
+    AND COUNT(DISTINCT ledger.run_id) = 5
     AND count_if(
       ledger.session_id = 'txn-smoke-v1'
         AND ledger.tariff_id = 'tariff-smoke-v1'
@@ -174,17 +180,19 @@ SELECT assert_true(
         AND ledger.price_per_kwh = CAST(0.45 AS DECIMAL(18,6))
         AND ledger.expected_amount_unrounded = CAST(5.625 AS DECIMAL(37,12))
         AND ledger.expected_amount = CAST(5.63 AS DECIMAL(18,2))
-    ) = 3,
-  'Expected three independent fixture charges: 12.5 kWh at EUR 0.45/kWh, EUR 5.625 unrounded and EUR 5.63 rounded HALF_UP, with matching tariff provenance.'
+    ) = 5,
+  'Expected five independent fixture charges: 12.5 kWh at EUR 0.45/kWh, EUR 5.625 unrounded and EUR 5.63 rounded HALF_UP, with matching tariff provenance.'
 )
 FROM IDENTIFIER(:table_name) AS ledger
 LEFT JOIN IDENTIFIER(:tariff_history_table_name) AS tariff
   ON tariff.run_id = ledger.run_id
   AND tariff.tariff_id = ledger.tariff_id
   AND tariff.valid_from = ledger.tariff_valid_from
-WHERE ledger.run_id IN ('smoke-run-v1', 'amount-bad-v1', 'amount-fixed-v1');
+WHERE ledger.run_id IN ('smoke-run-v1', 'amount-bad-v1', 'amount-fixed-v1',
+  'mock-amount-bad-v1', 'mock-amount-fixed-v1');
 
 SELECT *
 FROM IDENTIFIER(:table_name)
-WHERE run_id IN ('smoke-run-v1', 'amount-bad-v1', 'amount-fixed-v1')
+WHERE run_id IN ('smoke-run-v1', 'amount-bad-v1', 'amount-fixed-v1',
+  'mock-amount-bad-v1', 'mock-amount-fixed-v1')
 ORDER BY run_id;

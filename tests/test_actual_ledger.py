@@ -241,10 +241,20 @@ class BundleWiringTests(unittest.TestCase):
         for block in re.split(r"(?m)^        - task_key: ", text)[1:]:
             key = block.splitlines()[0]
             self.assertNotIn(key, tasks)
-            path = re.search(r"(?m)^              path: (.+)$", block).group(1)
-            source = (ROOT / "resources" / path).read_text(encoding="utf-8")
-            params = set(re.findall(r"(?m)^              (\w+): ", block.split("            parameters:\n")[1]))
-            self.assertEqual(params, set(re.findall(r"IDENTIFIER\(:(\w+)\)", source)), key)
+            if "          sql_task:" in block:
+                path = re.search(r"(?m)^              path: (.+)$", block).group(1)
+                source = (ROOT / "resources" / path).read_text(encoding="utf-8")
+                params = set(re.findall(r"(?m)^              (\w+): ", block.split("            parameters:\n")[1]))
+                self.assertEqual(params, set(re.findall(r"IDENTIFIER\(:(\w+)\)", source)), key)
+            else:
+                self.assertEqual(key, "generate_mock_billing")
+                path = re.search(r"(?m)^            notebook_path: (.+)$", block).group(1)
+                source = (ROOT / "resources" / path).read_text(encoding="utf-8")
+                self.assertTrue(source.startswith("# Databricks notebook source"))
+                params = set(re.findall(r"(?m)^              (\w+): ", block.split("            base_parameters:\n")[1]))
+                self.assertEqual(params, {"run_manifest_table_name", "raw_events_table_name", "raw_tariffs_table_name", "raw_cdrs_table_name"})
+                self.assertTrue((ROOT / "notebooks/mock_billing.py").is_file())
+                self.assertNotRegex(block, r"(?m)^          (?:new_cluster|existing_cluster_id|job_cluster_key):")
             tasks[key] = re.findall(r"(?m)^            - task_key: (.+)$", block)
 
         def visit(key, trail=()):
@@ -255,10 +265,14 @@ class BundleWiringTests(unittest.TestCase):
 
         for key in tasks:
             visit(key)
-        self.assertEqual(tasks["create_actual_ledger"], ["create_ocpi_cdrs_raw", "seed_amount_scenarios"])
+        self.assertEqual(tasks["create_actual_ledger"], ["create_ocpi_cdrs_raw", "seed_amount_scenarios", "generate_mock_billing"])
         self.assertEqual(tasks["seed_amount_scenarios"], ["create_ocpp_transaction_events_raw", "create_tariffs_raw", "create_ocpi_cdrs_raw"])
+        self.assertEqual(tasks["generate_mock_billing"], ["seed_amount_scenarios"])
         self.assertIn("seed_amount_scenarios", tasks["create_session_lifecycle"])
         self.assertIn("seed_amount_scenarios", tasks["create_tariff_history"])
+        self.assertIn("generate_mock_billing", tasks["create_session_lifecycle"])
+        self.assertIn("generate_mock_billing", tasks["create_tariff_history"])
+        self.assertNotRegex(text, r"(?m)^      (?:schedule|trigger|continuous):")
         self.assertEqual(tasks["create_assertion_result"], ["create_expected_ledger", "create_actual_ledger"])
         self.assertEqual(tasks["create_release_verdict"], ["create_assertion_result"])
         self.assertEqual(set(re.findall(r"IDENTIFIER\(:(\w+)\)", SQL)), {"table_name", "raw_cdrs_table_name"})
