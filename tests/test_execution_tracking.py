@@ -11,7 +11,10 @@ from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 import sqlite3
+import sys
+from types import ModuleType
 import unittest
+from unittest.mock import Mock, patch
 
 import test_amount_scenarios as amount_fixture
 from notebooks import execution_tracking as tracking
@@ -75,6 +78,73 @@ class ExecutionFixture(unittest.TestCase):
 
 
 class ExecutionTrackingTests(ExecutionFixture):
+    def test_capture_filters_scenario_ids_as_scalar_strings_before_publication(self):
+        # Exercise track's actual capture path at its Spark API boundary. This
+        # strict string-column adapter rejects nested tuple literals; it does not
+        # emulate Spark schemas, SQL execution, or Delta transaction semantics.
+        isin_calls = []
+
+        class StringColumn:
+            def __init__(self, name):
+                self.name = name
+
+            def __eq__(self, value):
+                return lambda row: row[self.name] == value
+
+            def isin(self, *values):
+                if not all(isinstance(value, str) for value in values):
+                    raise TypeError("String membership requires individual scalar literals.")
+                isin_calls.append(values)
+                return lambda row: row[self.name] in values
+
+        schema = object()
+
+        def frame(rows):
+            result = Mock(schema=schema)
+            result.where.side_effect = lambda predicate: frame([row for row in rows if predicate(row)])
+            result.limit.side_effect = lambda count: frame(rows[:count])
+            result.collect.return_value = [Mock(asDict=Mock(return_value=deepcopy(row))) for row in rows]
+            return result
+
+        published = []
+        tables = {
+            "job_execution": [registration("100"), self.registration],
+            "execution_verdict": published,
+            "release_verdict": [{**self.verdicts[0], "run_id": "unregistered-run"}, *self.verdicts],
+            "assertion_result": [{**self.assertions[0], "run_id": "unregistered-run"}, *self.assertions],
+        }
+        spark = Mock()
+        spark.table.side_effect = lambda name: frame(tables[name])
+
+        def publish_snapshots(statement, args=None):
+            if statement == "SET TIME ZONE 'UTC'":
+                return
+            self.assertTrue(statement.startswith("MERGE INTO IDENTIFIER(:table_name)"))
+            self.assertEqual(args, {"table_name": "execution_verdict"})
+            published.extend(deepcopy(spark.createDataFrame.call_args.args[0]))
+
+        spark.sql.side_effect = publish_snapshots
+        modules = {name: ModuleType(name) for name in ("pyspark", "pyspark.sql", "pyspark.sql.functions")}
+        modules["pyspark.sql.functions"].col = StringColumn
+        modules["pyspark.sql"].functions = modules["pyspark.sql.functions"]
+        modules["pyspark"].sql = modules["pyspark.sql"]
+        with patch.dict(sys.modules, modules), patch.object(tracking, "_ensure_tables"), \
+                patch.object(tracking, "verify_snapshots", wraps=tracking.verify_snapshots) as verify, \
+                patch("builtins.print"):
+            tracking.track(
+                spark, mode="capture", job_id="7", job_run_id="101", repair_count="0",
+                job_execution_table_name="job_execution", execution_verdict_table_name="execution_verdict",
+                release_verdict_table_name="release_verdict", assertion_result_table_name="assertion_result",
+                task_states_json=tracking.canonical_json(self.capture_states),
+            )
+        self.assertEqual(isin_calls, [tracking.EXPECTED_RUN_IDS, tracking.EXPECTED_RUN_IDS])
+        self.assertEqual(published, self.capture())
+        self.assertEqual({row["execution_id"] for row in published}, {"7:101:0"})
+        self.assertEqual(sum(len(json.loads(row["assertions_snapshot"])) for row in published), 98)
+        self.assertEqual(verify.call_count, 2)
+        self.assertEqual(verify.call_args.kwargs, {"require_complete": True})
+        spark.createDataFrame.assert_called_once_with(published, schema=schema)
+
     def test_execution_identity_distinguishes_job_run_and_repair(self):
         identities = {
             tracking.execution_identity("7", "101", "0"),

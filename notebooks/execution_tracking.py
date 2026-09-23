@@ -296,9 +296,9 @@ def track(spark, *, mode, job_id, job_run_id, repair_count, job_execution_table_
     if mode == "capture":
         _require(state_error is None, state_error)
         verdicts = [row.asDict(recursive=True) for row in spark.table(release_verdict_table_name)
-                    .where(F.col("run_id").isin(EXPECTED_RUN_IDS)).limit(len(EXPECTED_RUN_IDS) + 1).collect()]
+                    .where(F.col("run_id").isin(*EXPECTED_RUN_IDS)).limit(len(EXPECTED_RUN_IDS) + 1).collect()]
         assertions = [row.asDict(recursive=True) for row in spark.table(assertion_result_table_name)
-                      .where(F.col("run_id").isin(EXPECTED_RUN_IDS)).limit(len(EXPECTED_RUN_IDS) * 14 + 1).collect()]
+                      .where(F.col("run_id").isin(*EXPECTED_RUN_IDS)).limit(len(EXPECTED_RUN_IDS) * 14 + 1).collect()]
         expected = validate_capture(registration, verdicts, assertions, states)
         verify_snapshots(snapshot_rows(), expected)
         spark.createDataFrame(expected, schema=spark.table(execution_verdict_table_name).schema) \
