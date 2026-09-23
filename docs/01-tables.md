@@ -12,9 +12,9 @@ ChargeAssert uses managed Delta tables inside these Unity Catalog schemas:
 | Silver | `workspace.chargeassert_dev_silver` |
 | Gold | `workspace.chargeassert_dev_gold` |
 
-Twelve tables now have version-controlled SQL or Python creation code wired into the `create_tables` job, which has fifteen tasks including fixture loading, an on-demand Python mock billing generator and execution tracking. **Implemented means code exists, not that its latest version has been deployed or successfully run.** The user confirmed all 14 Gold smoke assertions PASS on 2026-09-18, the smoke release verdict PASS with 14/14 checks on 2026-09-19, and the paired canned fixtures on 2026-09-20. The Python-generated pair was confirmed in Databricks on 2026-09-21: `mock-amount-bad-v1` has baseline PASS, candidate/overall FAIL and 13 passing / 1 failing assertions; `mock-amount-fixed-v1` has both releases/overall PASS and 14 passing / 0 failing assertions. Deployment and workspace verification of the new execution-tracking tasks remain pending.
+Twelve tables now have version-controlled SQL or Python creation code wired into the `create_tables` job, which has fifteen tasks including fixture loading, an on-demand Python mock billing generator and execution tracking. **Implemented means code exists, not that its latest version has been deployed or successfully run.** The user confirmed all 14 Gold smoke assertions PASS on 2026-09-18, the smoke release verdict PASS with 14/14 checks on 2026-09-19, and the paired canned fixtures on 2026-09-20. The Python-generated amount pair was confirmed in Databricks on 2026-09-21: `mock-amount-bad-v1` has baseline PASS, candidate/overall FAIL and 13 passing / 1 failing assertions; `mock-amount-fixed-v1` has both releases/overall PASS and 14 passing / 0 failing assertions. Execution tracking and the new missing-CDR pair are implemented but still need deployment and workspace verification.
 
-The job retains three canned regression runs (`smoke-run-v1`, `amount-bad-v1`, `amount-fixed-v1`) and adds two runs with computed mock outputs (`mock-amount-bad-v1`, `mock-amount-fixed-v1`). Each has one session (`txn-smoke-v1`), the same three OCPP-shaped input events, one EUR energy tariff and two CDR responses. The Python mock calculates the reported charge from the raw meter events and tariff, while the independent Silver SQL oracle calculates the expectation separately. The candidate reports EUR 6.50 in each bad run; healthy responses report EUR 5.63. This remains a small synthetic demonstration, not the complete release gate or six-scenario suite.
+The job retains three canned regression runs (`smoke-run-v1`, `amount-bad-v1`, `amount-fixed-v1`) and four runs with computed mock behavior (`mock-amount-bad-v1`, `mock-amount-fixed-v1`, `mock-missing-cdr-bad-v1`, `mock-missing-cdr-fixed-v1`). Each has one session (`txn-smoke-v1`), the same three OCPP-shaped input events and one EUR energy tariff. The Python mock calculates the reported charge from the raw meter events and tariff, while the independent Silver SQL oracle calculates the expectation separately. The bad amount candidates report EUR 6.50; healthy responses report EUR 5.63. The bad missing-CDR candidate returns no billing record at all. Every other run has one baseline and one candidate CDR. This remains a small synthetic demonstration, not the complete release gate or six-scenario suite.
 
 The generator runs once when the job is started and then exits. There is no schedule, continuous loop, HTTP server or background service.
 
@@ -37,11 +37,12 @@ Bronze preserves original inputs and the captured baseline and candidate outputs
 ### `job_execution` contract
 
 - Destination: `workspace.chargeassert_dev_bronze.job_execution`; logical key: `execution_id`. This operational audit accompanies the original Bronze evidence; it is not a charging-session record.
-- `execution_id` is `<job_id>:<job_run_id>:<repair_count>`, using Databricks job context. A full new job run gets a new identifier even when all five scenario run IDs and input bytes are unchanged. Invalid or unresolved context is rejected.
-- The begin task registers `RUNNING` before the existing pipeline and freezes the five required scenario IDs in `expected_run_ids_json`: `smoke-run-v1`, `amount-bad-v1`, `amount-fixed-v1`, `mock-amount-bad-v1` and `mock-amount-fixed-v1`. This is a fixed fixture inventory, not yet a general manifest of every intended session.
-- The finish task records `SUCCEEDED` only after every required preceding task explicitly succeeded and five complete, unique snapshots exist for that execution. Otherwise it records `FAILED` with task-state evidence and a reason, then raises an error so the job reports failure. The audit status confirms upstream completion and committed snapshots; confirm the finalizer and the Databricks job itself also finish successfully before accepting a result. The deliberately faulty scenarios still have financial verdict `FAIL`.
+- `execution_id` is `<job_id>:<job_run_id>:<repair_count>`, using Databricks job context. A full new job run gets a new identifier even when all seven scenario run IDs and input bytes are unchanged. Invalid or unresolved context is rejected.
+- The begin task registers `RUNNING` before the existing pipeline and freezes the seven required scenario IDs in `expected_run_ids_json`: `smoke-run-v1`, `amount-bad-v1`, `amount-fixed-v1`, `mock-amount-bad-v1`, `mock-amount-fixed-v1`, `mock-missing-cdr-bad-v1` and `mock-missing-cdr-fixed-v1`. This is a fixed fixture inventory, not yet a general manifest of every intended session.
+- The finish task records `SUCCEEDED` only after every required preceding task explicitly succeeded and seven complete, unique snapshots exist for that execution. Otherwise it records `FAILED` with task-state evidence and a reason, then raises an error so the job reports failure. The audit status confirms upstream completion and committed snapshots; confirm the finalizer and the Databricks job itself also finish successfully before accepting a result. Intentional financial `FAIL` and dependent `BLOCKED` assertions are valid captured test results; they do not by themselves mean the job failed operationally.
 - A canceled job or unavailable compute can prevent finalization. Such an execution can remain `RUNNING`; if registration never happened, the requested identifier is absent. The check query labels these incomplete/missing outcomes and returns `BLOCKED`, never a previous PASS.
 - Repair attempts fail closed in this version. Start a new full job after correcting a failure; partial repairs can reuse successful tasks from an earlier attempt and do not establish complete fresh processing. The job permits only one concurrent run.
+- Existing completed executions with the earlier five-run inventory and their immutable snapshots remain unchanged and readable by exact execution ID. The seven-run inventory applies to new full jobs. Do not repair an old attempt to add the new scenarios.
 
 The tracking code is `notebooks/execution_tracking.py`, called by `notebooks/track_execution.py` in begin, capture and finish modes. Context and task outcomes use documented [Databricks dynamic references](https://docs.databricks.com/aws/en/jobs/dynamic-value-references). The finalizer uses [All done dependencies](https://docs.databricks.com/gcp/en/jobs/run-if); it cannot guarantee a completion write if it is itself canceled or fails.
 
@@ -79,21 +80,38 @@ The tracking code is `notebooks/execution_tracking.py`, called by `notebooks/tra
 
 ### On-demand mock billing
 
-`notebooks/mock_billing.py` implements a small billing mock using only the Python standard library. `notebooks/generate_mock_billing.py` runs it in the `generate_mock_billing` notebook task after `seed_amount_scenarios`, then writes the evidence to the existing Bronze tables. No new table is required.
+`notebooks/mock_billing.py` implements the original amount billing mock using only the Python standard library. `notebooks/mock_missing_cdr.py` adds the missing-CDR behavior and `generate_all_mock_runs` combines the two pairs. `notebooks/generate_mock_billing.py` runs that combined generator in the existing `generate_mock_billing` notebook task after `seed_amount_scenarios`, then writes the evidence to the existing Bronze tables. No new table or task is required.
 
 | Run | Baseline behavior | Candidate behavior | Expected candidate amount | Expected verdict |
 | --- | --- | --- | --- | --- |
 | `mock-amount-bad-v1` | Healthy calculation | Deliberate EUR 0.87 surcharge | EUR 6.50 | FAIL |
 | `mock-amount-fixed-v1` | Healthy calculation | Healthy calculation | EUR 5.63 | PASS |
 
-- The mock reads the same raw smoke event and tariff JSON for both releases and both runs. It derives energy from the meter difference, duration from the event timestamps and the energy rate from the tariff. It calculates with `Decimal` and rounds the session amount HALF_UP to cents. It does not read Silver, Gold or a canned CDR to obtain the result.
+- For the amount pair, the mock reads the same raw smoke event and tariff JSON for both releases and both runs. It derives energy from the meter difference, duration from the event timestamps and the energy rate from the tariff. It calculates with `Decimal` and rounds the session amount HALF_UP to cents. It does not read Silver, Gold or a canned CDR to obtain the result.
 - The faulty behavior adds EUR 0.87 to the calculated amount; the healthy behavior returns the calculated amount. Both generate the supported OCPI-shaped financial subset with `cdr_id = 'cdr-mock-v1'`. Full token/location data and protocol certification remain outside the implementation.
 - The source event/tariff bytes, logical input IDs and fixed clock are preserved. New run IDs isolate generated evidence from the old canned fixtures, so their raw payloads and verdicts remain queryable. These fixed scenarios do not yet generate different events from the seed.
-- The new manifests hash the source tariff payload. Their `baseline_sha` and `candidate_sha` fingerprint the Python billing module bytes together with the selected behavior; these values identify the mock implementation/behavior, not tested Git release commits. The bad and fixed runs share the healthy baseline fingerprint and have different candidate fingerprints.
-- Insert-only merges and drift checks retain the first evidence, reject conflicting reuse of a run ID and keep identical reruns at one manifest, three events, one tariff and two raw CDRs per run. Changed mock code or inputs require new versioned run IDs and corresponding fixture expectations; do not rewrite existing evidence to make a rerun pass.
-- Silver independently prices all five mapped sessions. The generated bad candidate must fail only `amount_match` at +EUR 0.87; its baseline passes, and the generated fixed run has 14 passing checks. Gold decides the financial outcome; the generator never writes a PASS/FAIL decision.
+- The amount pair's manifests hash the source tariff payload. Their `baseline_sha` and `candidate_sha` fingerprint the original Python billing module bytes together with the selected behavior; these values identify the mock implementation/behavior, not tested Git release commits. The bad and fixed amount runs share the healthy baseline fingerprint and have different candidate fingerprints.
+- Insert-only merges and drift checks retain the first evidence and reject conflicting reuse of a run ID. For the amount pair, identical reruns keep one manifest, three events, one tariff and two raw CDRs per run. Changed mock code or inputs require new versioned run IDs and corresponding fixture expectations; do not rewrite existing evidence to make a rerun pass.
+- Silver independently prices all seven mapped sessions, including the missing-CDR session for which the candidate returns nothing. The generated bad amount candidate must fail only `amount_match` at +EUR 0.87; its baseline passes, and the generated fixed amount run has 14 passing checks. Gold decides the financial outcome; the generator never writes a PASS/FAIL decision.
 - This is one batch task per manual job execution. It requires Databricks serverless notebook/job compute in addition to the existing SQL warehouse. No extra Python packages, scheduled trigger or continuously running process are added. See the [Databricks serverless job bundle example](https://docs.databricks.com/aws/en/dev-tools/bundles/examples#job-that-uses-serverless-compute).
 - The user confirmed both generated verdicts and their 13/1 versus 14/0 assertion counts in Databricks on 2026-09-21. Execution tracking is a subsequent change and still needs its own workspace verification.
+
+### Missing-CDR mock scenario
+
+This scenario tests a completed charging session whose final billing record is absent. `notebooks/mock_missing_cdr.py` reuses the original mock's input validation and healthy billing calculation, then deliberately suppresses the faulty candidate's CDR. The raw events and tariff remain present for both releases, so the independent oracle still expects 12.5 kWh, one hour and EUR 5.63.
+
+| Run | Baseline CDRs | Candidate CDRs | Baseline / candidate / overall verdict | Passed | Failed | Blocked |
+| --- | ---: | ---: | --- | ---: | ---: | ---: |
+| `mock-missing-cdr-bad-v1` | 1 | 0 | PASS / FAIL / FAIL | 8 | 1 | 5 |
+| `mock-missing-cdr-fixed-v1` | 1 | 1 | PASS / PASS / PASS | 14 | 0 | 0 |
+
+- Both runs use `scenario_id = 'mock-missing-cdr-v1'`, seed 42, session `txn-smoke-v1` and tariff `tariff-smoke-v1`, with identical input bytes and a fixed clock. Separate run IDs retain both faulty and corrected evidence.
+- There is no candidate Bronze CDR or Silver actual-ledger row in the bad run. The generator inserts neither a null placeholder nor a made-up zero charge. It checks that no unexpected candidate record already exists under this run ID.
+- The bad candidate's `oracle_available` passes. Its `final_cdr_count` fails with **expected 1, actual 0, difference -1**. `energy_match`, `duration_match`, `currency_match`, `tariff_match` and `amount_match` are `BLOCKED` because there is no reported record to compare. The expected amount remains EUR 5.63; the amount's actual value and difference are null.
+- The seven baseline checks pass in both runs. In the corrected run, the candidate returns one healthy CDR and all fourteen checks pass. Existing Gold rule logic decides these outcomes; additional fixture checks enforce the expected demonstration results.
+- `mock_billing.py` remains byte-for-byte unchanged because existing amount manifests fingerprint its source. Missing-CDR manifest fingerprints include both that helper's source and the new module's source, normalized to LF line endings, plus the selected behavior (`healthy-v1` or `drop-final-cdr-v1`). They identify this mock implementation, not an executed Git release build. A changed source or input requires new versioned run IDs, not overwriting retained evidence.
+- The missing record demonstrates a **potentially unbilled EUR 5.63 synthetic session**. It does not prove actual revenue loss, and aggregate leakage or modeled exposure is not calculated yet. This is an in-process mock; HTTP delivery/retry traces are not implemented.
+- These two new cases and their execution snapshots still require Databricks verification. Rerunning identical code and inputs must preserve the one-record bad run and two-record fixed run.
 
 ## Silver — produce trusted business records
 
@@ -103,7 +121,7 @@ Silver validates, deduplicates and normalizes the raw evidence.
 | --- | --- | --- | --- |
 | `session_lifecycle` | Implemented, happy path only | One logical charging session in one run | `run_id`, `session_id`, `started_at`, `ended_at`, `meter_start_wh`, `meter_end_wh`, `status` |
 | `tariff_history` | Implemented; smoke join verified in Databricks | One effective tariff period in one run | `run_id`, `tariff_id`, `valid_from`, `valid_to`, `currency`, `price_components`, `source_payload_hash` |
-| `expected_ledger` | Implemented for five fixture sessions; all five checked through Gold in Databricks | The independently calculated charge for one session | `run_id`, `session_id`, `expected_energy_kwh`, `price_per_kwh`, `expected_amount_unrounded`, `expected_amount`, `currency`, `tariff_id`, `tariff_valid_from`, `tariff_payload_hash` |
+| `expected_ledger` | Implemented for seven fixture sessions; original five checked through Gold in Databricks, missing-CDR pair pending | The independently calculated charge for one session | `run_id`, `session_id`, `expected_energy_kwh`, `price_per_kwh`, `expected_amount_unrounded`, `expected_amount`, `currency`, `tariff_id`, `tariff_valid_from`, `tariff_payload_hash` |
 | `actual_ledger` | Implemented for the final-CDR subset; Gold smoke checks verified | One normalized CDR returned by either release | `run_id`, `release_role`, `country_code`, `party_id`, `session_id`, `cdr_id`, `cdr_type`, `started_at`, `ended_at`, `actual_energy_kwh`, `actual_duration_hours`, `actual_amount`, `currency`, `tariff_id`, `source_payload_hashes` |
 
 `actual_ledger` preserves different CDR IDs for the same session and release. Repeated delivery of the same payload is deduplicated; two different financial records for one billable session are preserved and reported as a business defect by Gold.
@@ -126,13 +144,13 @@ Silver can represent multiple periods for a tariff. The current Bronze fixture m
 
 - Sources: Silver `session_lifecycle` and `tariff_history`. The calculation does not read baseline or candidate billing outputs.
 - Destination: `workspace.chargeassert_dev_silver.expected_ledger`; logical key: `(run_id, session_id)`.
-- The explicit mapping prices `txn-smoke-v1` against `tariff-smoke-v1` independently in `smoke-run-v1`, `amount-bad-v1`, `amount-fixed-v1`, `mock-amount-bad-v1` and `mock-amount-fixed-v1`. Each required session and tariff match is checked separately, so a missing run cannot be hidden by duplicate rows in another run. Other sessions are outside this fixture mapping; a general scenario registry is still needed.
+- The explicit mapping prices `txn-smoke-v1` against `tariff-smoke-v1` independently in `smoke-run-v1`, `amount-bad-v1`, `amount-fixed-v1`, `mock-amount-bad-v1`, `mock-amount-fixed-v1`, `mock-missing-cdr-bad-v1` and `mock-missing-cdr-fixed-v1`. Each required session and tariff match is checked separately, so a missing run cannot be hidden by duplicate rows in another run. The absence of a candidate CDR does not remove its expected charge. Other sessions are outside this fixture mapping; a general scenario registry is still needed.
 - Require one completed session with nonnegative, nondecreasing meter readings and valid start/end timestamps, plus exactly one matching tariff effective at the session start. Missing or ambiguous matches fail the task.
 - The supported tariff is one EUR ENERGY component with `step_size = 1`. The full session must fit within the selected period; sessions crossing a tariff boundary fail until boundary pricing is implemented.
 - Energy is `(meter_end_wh - meter_start_wh) / 1000`, stored as `DECIMAL(18,6)`. Price is `DECIMAL(18,6)` and their unrounded product is retained as `DECIMAL(37,12)`.
 - Round the session total once using **HALF_UP to two decimal places**; store `expected_amount` as `DECIMAL(18,2)`. This is the chosen synthetic MVP contract, not a claim about every operator's billing rules. Databricks [`round(amount, 2)`](https://docs.databricks.com/gcp/en/sql/language-manual/functions/round) uses HALF_UP.
 - Retain the selected tariff ID, period start, payload hash, currency and rate for traceability. Reruns update the same logical ledger row.
-- The fixture assertion requires five independently calculated rows, each with 12.5 kWh at EUR 0.45/kWh, EUR 5.625 unrounded and **EUR 5.63 rounded**. Meter normalization/reset handling still depends on future session validation work.
+- The fixture assertion requires seven independently calculated rows, each with 12.5 kWh at EUR 0.45/kWh, EUR 5.625 unrounded and **EUR 5.63 rounded**. Meter normalization/reset handling still depends on future session validation work.
 
 ### `actual_ledger` contract
 
@@ -154,7 +172,7 @@ python -B -m unittest discover -s tests -v
 
 They exercise production fixture-source, lifecycle, expected-charge, normalization, assertion and verdict SELECT queries with SQLite adapters for parsed fields, timestamps, arrays/JSON and HALF_UP rounding, plus job wiring. They cover release/run isolation, exact and equivalent deliveries, distinct CDR preservation, conflicts, invalid inputs, fractional-cent retention, missing/duplicate CDR assertions, financial mismatches, oracle gaps and evidence. Paired-fixture checks follow the seeded responses through the independent expected calculation and Gold decisions, verify unchanged inputs, reject missing/ambiguous oracle inputs and check repeat loading with an emulation of insert-only keys. Python mock checks exercise the executable calculation and generated outputs independently of Databricks. Verdict tests also cover missing entire releases/sessions, duplicate checks replacing missing checks, unsupported rules/roles/statuses, empty runs and missing/duplicate manifests. These checks do **not** execute a Databricks notebook, `from_json`, Spark type analysis/decimal arithmetic, Delta DDL or actual `MERGE`; workspace execution remains required.
 
-Execution tests exercise the Python publication/completion checks and the canonical SQL consumer against the existing five-run financial fixtures. They cover success followed by pre-Gold failure and a fresh success, stale verdicts, immutable snapshot conflicts, missing/duplicate evidence, incomplete task states, rejected repairs and inconsistent PASS counts. Databricks dynamic-reference resolution, scheduler behavior and the actual Spark/Delta writes still require the workspace demonstration below.
+Execution tests exercise the Python publication/completion checks and the canonical SQL consumer against the seven-run financial fixtures, including the missing-CDR run's valid FAIL/BLOCKED assertion snapshot. They cover success followed by pre-Gold failure and a fresh success, stale verdicts, immutable snapshot conflicts, missing/duplicate evidence, incomplete task states, rejected repairs and inconsistent PASS counts. The earlier five-run completed snapshots remain readable by their exact execution ID. Databricks dynamic-reference resolution, scheduler behavior and the actual Spark/Delta writes still require the workspace demonstration below.
 
 ## Gold — make the release decision
 
@@ -163,7 +181,7 @@ Gold stores explainable checks, current scenario verdicts and immutable executio
 | Table | Status | One row represents | Important fields |
 | --- | --- | --- | --- |
 | `assertion_result` | Implemented; 14 smoke PASS rows verified in Databricks | One rule checked for one session and release | `run_id`, `release_role`, `session_id`, `assertion_id`, `expected_value`, `actual_value`, `difference`, `status`, `severity`, `message`, `evidence` |
-| `release_verdict` | Implemented; all five fixture outcomes verified in Databricks | The current diagnostic decision for one scenario run, including both release outcomes | `run_id`, manifest provenance, assertion/coverage counts, `baseline_verdict`, `candidate_verdict`, `verdict`, `reason`, `first_problem`, `evidence`, `evaluated_at` |
+| `release_verdict` | Implemented for seven fixtures; original five outcomes verified in Databricks, missing-CDR pair pending | The current diagnostic decision for one scenario run, including both release outcomes | `run_id`, manifest provenance, assertion/coverage counts, `baseline_verdict`, `candidate_verdict`, `verdict`, `reason`, `first_problem`, `evidence`, `evaluated_at` |
 | `execution_verdict` | Implemented; workspace verification pending | An immutable scenario verdict and assertion snapshot from one job execution | `execution_id`, `run_id`, release verdicts, assertion counts, `reason`, `verdict_snapshot`, `assertions_snapshot` |
 
 The future GitHub check must require a successful current full Databricks job, a unique `job_execution.status = 'SUCCEEDED'` for that exact attempt and a matching `execution_verdict.verdict = 'PASS'` for the requested scenario. A failed/incomplete job, missing or duplicate registration/snapshot, `BLOCKED` check or financial `FAIL` must block the release. Do not fall back to the most recent successful execution or the mutable `release_verdict` table. Direct baseline/candidate differences still need reporting alongside the independent assertions; a shared billing defect already fails both releases against the oracle.
@@ -192,19 +210,19 @@ The future GitHub check must require a successful current full Databricks job, a
 | `tariff_match` | Reported tariff ID matches the selected tariff ID after case normalization. |
 | `amount_match` | Reported exclusive-VAT amount equals the rounded oracle amount in the same currency. |
 
-This first implementation consumes the supported final-CDR Silver contract. It does not yet compare releases directly, verify the full reported tariff version/content, compare reported start/end timestamps, report Silver parsing/conflict failures as Gold rows, or assert HTTP retry/late-event traces. The expected-ledger producer prices the five explicitly mapped fixture sessions; general scenarios need their own independent expectations. The GitHub gate remains unimplemented.
+This first implementation consumes the supported final-CDR Silver contract. It does not yet compare releases directly, verify the full reported tariff version/content, compare reported start/end timestamps, report Silver parsing/conflict failures as Gold rows, or assert HTTP retry/late-event traces. The expected-ledger producer prices the seven explicitly mapped fixture sessions; general scenarios need their own independent expectations. The GitHub gate remains unimplemented.
 
 ### `release_verdict` contract
 
 - Sources: Bronze `run_manifest`, Gold `assertion_result`, and Silver `expected_ledger`, `session_lifecycle` and `actual_ledger`. Destination: `workspace.chargeassert_dev_gold.release_verdict`; logical key: `run_id`.
-- Produce one row for every run found in any of those tables. A manifest with no sessions/checks gets FAIL; data with no manifest also gets FAIL. Exactly one manifest is required. Copy `scenario_id`, `seed`, `baseline_sha`, `candidate_sha` and `tariff_hash` only when the manifest is unique; missing/duplicate manifests leave this provenance null. Canned-fixture SHAs remain synthetic labels; new mock SHAs fingerprint its module and behavior. Neither is a validated source-release commit.
+- Produce one row for every run found in any of those tables. A manifest with no sessions/checks gets FAIL; data with no manifest also gets FAIL. Exactly one manifest is required. Copy `scenario_id`, `seed`, `baseline_sha`, `candidate_sha` and `tariff_hash` only when the manifest is unique; missing/duplicate manifests leave this provenance null. Canned-fixture SHAs remain synthetic labels; mock SHAs fingerprint the applicable source modules and behavior. Neither is a validated source-release commit.
 - Derive required assertion keys independently from Silver using the same session scope as `assertion_result`: expected-ledger and completed-lifecycle sessions require both release roles; supported FINAL actual-only sessions require their reporting role. Cross those keys with the explicit seven-rule registry. An entire missing session/release cannot disappear by reducing the observed assertion count.
 - Each release needs a nonempty required set, exactly one PASS row per required key, and no failed, blocked, duplicate, unexpected or invalid-status assertions. Both `baseline_verdict` and `candidate_verdict` must be PASS for the overall `verdict` to pass. Unknown-role assertions also fail the overall verdict even when the two known releases independently pass.
 - Verdicts are `PASS` or `FAIL`. Blocked assertions are retained in the counts but produce a FAIL verdict. A failed baseline blocks the overall run even if the candidate passes; matching baseline/candidate mistakes do not establish correctness.
 - `reason` explains the highest-priority problem. `first_problem` is a JSON reference containing problem type and available run/release/session/assertion keys. Order is deterministic: manifest error, empty coverage, missing check, duplicate check, unexpected check, invalid status, FAIL, then BLOCKED; ties sort by release/session/assertion. This is an investigation entry point, **not the first chronological divergence**. For existing checks, retrieve `assertion_result` by these keys to inspect values, messages and original evidence.
 - `evidence` contains rule version, manifest-row count and separate `baseline`/`candidate` summaries with coverage counts and verdicts. Run-level totals also include assertions with unsupported release roles.
 - The merge maintains the current snapshot over all retained runs: update by `run_id`, insert new runs, delete Gold verdicts for runs no longer present in any source. `evaluated_at` records the latest evaluation, so it changes on rerun; identical inputs retain the same decision, counts and problem reference.
-- The task runs after `create_assertion_result` with [`run_if: ALL_SUCCESS`](https://docs.databricks.com/gcp/en/jobs/run-if). Financial FAIL is stored as data. Fixture assertions require healthy smoke PASS, bad candidate FAIL with exactly one amount mismatch, and corrected candidate PASS. Correctly detecting the intentional defect is a successful job execution.
+- The task runs after `create_assertion_result` with [`run_if: ALL_SUCCESS`](https://docs.databricks.com/gcp/en/jobs/run-if). Financial FAIL is stored as data. Fixture assertions require healthy smoke PASS, each bad amount candidate FAIL with exactly one amount mismatch, the bad missing-CDR candidate FAIL with one failed count and five blocked comparisons, and all corrected candidates PASS. Correctly detecting an intentional defect is a successful job execution.
 
 | Count column | Meaning |
 | --- | --- |
@@ -224,8 +242,8 @@ The verdict provides the decision and traceable counts. Direct release compariso
 ### `execution_verdict` contract
 
 - Destination: `workspace.chargeassert_dev_gold.execution_verdict`; logical key: `(execution_id, run_id)`. The capture task retains the full scenario verdict in `verdict_snapshot` and its complete assertion rows in `assertions_snapshot` as JSON, together with queryable verdicts, counts and reasons. A later evaluation does not rewrite an earlier execution's evidence.
-- Capture requires a valid `RUNNING` registration, repair count zero, all thirteen preceding tasks explicitly reporting `success`, five unique fresh scenario verdicts and complete matching assertion evidence. A skipped/excluded task is insufficient even if the scheduler allows a downstream task to run.
-- Insert-only snapshots preserve earlier evidence. Identical retries are idempotent; conflicting reuse is rejected. A normal execution produces five snapshots containing seventy assertion records in total. Both deliberate financial FAIL cases are captured alongside the three passing cases.
+- Capture requires a valid `RUNNING` registration, repair count zero, all thirteen preceding tasks explicitly reporting `success`, seven unique fresh scenario verdicts and complete matching assertion evidence. A skipped/excluded task is insufficient even if the scheduler allows a downstream task to run.
+- Insert-only snapshots preserve earlier evidence. Identical retries are idempotent; conflicting reuse is rejected. A new normal execution produces seven snapshots containing ninety-eight assertion records in total. The three deliberate financial FAIL cases are captured alongside the four passing cases. The missing-CDR snapshot includes its five `BLOCKED` assertions without turning a successful test execution into an operational failure.
 - Snapshots alone are not a completion signal. Publication can write data before its task fails or is canceled. The finalizer independently requires successful capture, all other required task successes and the full snapshot set before recording `SUCCEEDED`. Readers join the snapshot to that exact successful registration.
 - [sql/12_check_execution.sql](../sql/12_check_execution.sql) is the canonical read query. Parameters are `execution_id`, scenario `run_id`, `job_execution_table_name` and `execution_verdict_table_name`. It anchors on the requested identifiers, returns one row even when registration is missing, and returns `BLOCKED` for incomplete, failed, duplicate or missing evidence.
 - This boundary assumes the retained fixture inputs are immutable and the configured job runs serially (`max_concurrent_runs: 1`). It does not version every Silver row, isolate manual/external writers, or replace checking the Databricks job's final successful state. Those limits must remain explicit when building the future GitHub gate.
@@ -263,7 +281,7 @@ databricks bundle run -t dev create_tables
 
 Run these in order, continuing only if each command succeeds. `deploy` uploads the SQL, notebooks and Python helpers and updates bundle resources; `run` registers a new execution, creates/populates the fixture tables, executes the mock once, checks the fixtures through Gold and records execution snapshots/completion. The SQL tasks use the configured `Serverless Starter Warehouse`; the mock and tracking notebook tasks use serverless job compute, which must be enabled and available to the job's runtime identity. Use the same workspace authentication as the existing dev deployment.
 
-`TERMINATED SUCCESS` confirms success for the job version that was deployed. The current job should contain **fifteen tasks**, including `begin_execution`, `capture_execution` and `finish_execution`. If any is absent, pull the updated `dev` branch and **deploy before running again**. A Git pull alone does not update the deployed job. It loads and evaluates all five fixture runs automatically; normal runs need no manual table inserts or parameter overrides. `fail_before_gold` defaults to `false`; use `true` only for the failure demonstration below. The generator and tracking tasks stop when the invocation finishes; another run happens only when the job is started again.
+`TERMINATED SUCCESS` confirms success for the job version that was deployed. The current job should contain **fifteen tasks**, including `begin_execution`, `capture_execution` and `finish_execution`. If any is absent, pull the updated `dev` branch and **deploy before running again**. A Git pull alone does not update the deployed job. It loads and evaluates all seven fixture runs automatically; normal runs need no manual table inserts or parameter overrides. `fail_before_gold` defaults to `false`; use `true` only for the failure demonstration below. The generator and tracking tasks stop when the invocation finishes; another run happens only when the job is started again.
 
 See the [Databricks bundle command reference](https://docs.databricks.com/gcp/en/dev-tools/cli/bundle-commands).
 
@@ -285,11 +303,11 @@ Run [sql/12_check_execution.sql](../sql/12_check_execution.sql) in SQL Editor wi
 | Parameter | Value |
 | --- | --- |
 | `execution_id` | Exact identifier for the requested job attempt |
-| `run_id` | `mock-amount-fixed-v1` (or another intended fixture) |
+| `run_id` | `mock-missing-cdr-fixed-v1`, then `mock-missing-cdr-bad-v1` (or another intended fixture) |
 | `job_execution_table_name` | `workspace.chargeassert_dev_bronze.job_execution` |
 | `execution_verdict_table_name` | `workspace.chargeassert_dev_gold.execution_verdict` |
 
-For a successful full job, expect `execution_status = 'SUCCEEDED'`, financial `PASS` and 14/0 counts for the fixed mock, and financial `FAIL` with 13/1 counts for the bad mock. A failed or incomplete execution must return financial `BLOCKED`, with null release verdicts/counts. A missing execution returns `execution_status = 'MISSING'`. Duplicate registration or snapshot rows also block the check.
+For a successful full job, check the same exact `execution_id` twice: with `run_id = 'mock-missing-cdr-fixed-v1'`, expect `execution_status = 'SUCCEEDED'`, financial `PASS` and 14 passed / 0 failed; with `run_id = 'mock-missing-cdr-bad-v1'`, expect `SUCCEEDED`, financial `FAIL` and 8 passed / 1 failed. The latter snapshot also contains 5 blocked assertions; the diagnostic query below displays that count. The earlier amount pair still returns 13/1 for bad and 14/0 for fixed. A failed or incomplete execution must return financial `BLOCKED`, with null release verdicts/counts. A missing execution returns `execution_status = 'MISSING'`. Duplicate registration or snapshot rows also block the check.
 
 The SQL below is the same anchored check with the default development table paths. Bind `:execution_id` and `:run_id` in SQL Editor:
 
@@ -378,7 +396,7 @@ FROM checked;
    databricks bundle run -t dev create_tables
    ```
 
-   Expect a new successful execution with five snapshots and the original fixture outcomes. A's snapshots remain unchanged; B remains a failed/incomplete attempt. Use a new full job, not Repair or a selected subset of tasks.
+   Expect a new successful execution with seven snapshots and all fixture outcomes described here. A's snapshots remain unchanged; B remains a failed/incomplete attempt. Use a new full job, not Repair or a selected subset of tasks.
 
 The failure parameter is a controlled execution test; it does not corrupt raw evidence or change the expected financial fixture outcomes. [Databricks `--params`](https://docs.databricks.com/aws/en/dev-tools/cli/bundle-commands#pass-job-parameters) passes job parameters for that invocation only. This A/B/C workspace demonstration remains pending until run on the deployed fifteen-task job.
 
@@ -551,9 +569,59 @@ ORDER BY run_id, release_role;
 
 Expect four rows. Only `mock-amount-bad-v1 / candidate` should show **5.630000 expected / 6.500000 actual / +0.870000 / FAIL**. The other three rows should show **5.630000 / 5.630000 / 0.000000 / PASS**. Query Bronze `ocpi_cdrs_raw` with these run IDs to inspect the generated `cdr-mock-v1` bodies and payload hashes. The user confirmed the generated pair's verdicts and 13/1 versus 14/0 counts on 2026-09-21; the new execution-tracking deployment and failure demonstration remain pending.
 
-For all five fixture runs combined, expect 5 manifests, 15 raw events, 5 raw tariffs, 10 raw CDRs, 5 lifecycle rows, 5 tariff-history rows, 5 expected-ledger rows, 10 actual-ledger rows, 70 assertion rows and 5 verdict rows. Filter counts to the five fixture run IDs if other data exists. Rerun the full job with identical code and inputs: these counts and raw payload hashes should remain stable, and both bad responses and their FAIL verdicts should remain present. `evaluated_at` may advance. A drift error requires investigating the changed input/code and using new versioned run IDs for an intentional change.
+Inspect the **missing-CDR pair** after the exact-execution check succeeds operationally:
 
-Execution history intentionally grows: each successful new full job adds one `job_execution` row and five `execution_verdict` snapshots containing seventy assertion records as JSON. Identical retries within one attempt do not add duplicate snapshots. A pre-Gold failure adds its audit record but no verdict snapshots; interrupted registration/finalization remains an incomplete outcome. The original ten fixture-table counts above are unchanged by execution tracking.
+```sql
+SELECT run_id, baseline_verdict, candidate_verdict, verdict,
+       required_assertions, passed_assertions, failed_assertions,
+       blocked_assertions, missing_assertions
+FROM workspace.chargeassert_dev_gold.release_verdict
+WHERE run_id IN ('mock-missing-cdr-bad-v1', 'mock-missing-cdr-fixed-v1')
+ORDER BY run_id;
+```
+
+| Run | Baseline | Candidate | Verdict | Required | Passed | Failed | Blocked | Missing |
+| --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: |
+| `mock-missing-cdr-bad-v1` | PASS | FAIL | FAIL | 14 | 8 | 1 | 5 | 0 |
+| `mock-missing-cdr-fixed-v1` | PASS | PASS | PASS | 14 | 14 | 0 | 0 | 0 |
+
+`missing_assertions = 0` means all required checks were produced. The missing **CDR** is the recorded failed count check; it is not a missing assertion.
+
+```sql
+SELECT run_id, assertion_id, expected_value, actual_value,
+       difference, status, message
+FROM workspace.chargeassert_dev_gold.assertion_result
+WHERE run_id IN ('mock-missing-cdr-bad-v1', 'mock-missing-cdr-fixed-v1')
+  AND release_role = 'candidate'
+ORDER BY run_id, assertion_id;
+```
+
+Expect fourteen rows. In the bad run, `oracle_available` is `PASS`; `final_cdr_count` is **1.000000 expected / 0.000000 actual / -1.000000 / FAIL**; the five value comparisons are `BLOCKED`. In particular, `amount_match` retains **5.630000 expected**, with a null actual value and a null difference. All seven candidate checks in the fixed run pass.
+
+To show the absent raw record explicitly, anchor the count on the intended runs and roles:
+
+```sql
+WITH runs AS (
+  SELECT 'mock-missing-cdr-bad-v1' AS run_id
+  UNION ALL SELECT 'mock-missing-cdr-fixed-v1'
+), roles AS (
+  SELECT 'baseline' AS release_role
+  UNION ALL SELECT 'candidate'
+)
+SELECT r.run_id, roles.release_role, COUNT(c.payload_hash) AS raw_cdr_count
+FROM runs AS r
+CROSS JOIN roles
+LEFT JOIN workspace.chargeassert_dev_bronze.ocpi_cdrs_raw AS c
+  ON c.run_id = r.run_id AND c.release_role = roles.release_role
+GROUP BY r.run_id, roles.release_role
+ORDER BY r.run_id, roles.release_role;
+```
+
+Expect four rows: bad baseline **1**, bad candidate **0**, fixed baseline **1**, fixed candidate **1**. A plain grouped query over CDR rows alone would omit the missing candidate rather than display zero. These are diagnostic current-table queries; retain the exact-execution snapshot for historical proof. Databricks confirmation of this pair remains pending.
+
+For all seven fixture runs combined, expect 7 manifests, 21 raw events, 7 raw tariffs, 13 raw CDRs, 7 lifecycle rows, 7 tariff-history rows, 7 expected-ledger rows, 13 actual-ledger rows, 98 assertion rows and 7 verdict rows. Filter counts to the seven fixture run IDs if other data exists. Rerun the full job with identical code and inputs: these counts and raw payload hashes should remain stable, including zero candidate CDRs for the bad missing-CDR run. All three intentionally faulty runs must retain their FAIL verdicts. `evaluated_at` may advance. A drift error requires investigating the changed input/code and using new versioned run IDs for an intentional change.
+
+Execution history intentionally grows: each successful new full job adds one `job_execution` row and seven `execution_verdict` snapshots containing ninety-eight assertion records as JSON. Identical retries within one attempt do not add duplicate snapshots. A pre-Gold failure adds its audit record but no verdict snapshots; interrupted registration/finalization remains an incomplete outcome. Earlier completed five-run receipts and snapshots remain unchanged and queryable by exact ID. The ten fixture-table counts above are unchanged by execution tracking.
 
 ## Remaining MVP work
 
@@ -561,23 +629,23 @@ Execution history intentionally grows: each successful new full job adds one `jo
 | --- | --- |
 | Reproducible inputs | A general versioned scenario registry, a seeded event generator, real baseline/candidate Git SHAs and complete input snapshot hashes. Current fixtures have fixed inputs/times. Canned runs use synthetic SHA labels; generated mock runs fingerprint module bytes and behavior. New paired manifests hash the tariff contents; the original smoke manifest still hashes an identifier. |
 | Public-data provenance and ingestion | Versioned ACN-Data behavior and French IRVE station snapshots, synthetic composition/provenance documentation, GCS input storage and Auto Loader ingestion. The combined data must not be presented as real French transactions or actual operator tariffs. |
-| Replay and fault injection | Extend the in-process Python billing mock beyond the deliberate amount surcharge to the required scenarios and external release/HTTP replay. Event/retry traces that identify the first divergence remain missing. The new pair executes healthy/faulty mock behavior on identical inputs; it does not execute actual software release builds. |
+| Replay and fault injection | Amount-surcharge and missing-CDR mock pairs are implemented on identical inputs; the missing-CDR pair still needs workspace verification. Add duplicate charge and the other required scenarios, then external release/HTTP replay. Event/retry traces that identify the first divergence remain missing. These mocks do not execute actual software release builds. |
 | Session validation | Select the appropriate meter measurand, normalize units/multipliers, handle meter resets, validate timestamps and sequence numbers, deduplicate transport retries, define late/missing/conflicting-event behavior, and preserve station identity when forming session keys. |
-| Tariff selection | Load multiple tariff periods in Bronze and replace the explicit five-fixture mapping with general scenario-defined session/tariff associations. Start-time selection is implemented; tariff-boundary pricing remains unsupported. Extend pricing only when a scenario requires it. |
-| Independent oracle | Generalize beyond the five mapped fixtures to validated scenario energy/duration. Decimal amounts, HALF_UP session-total rounding, per-session input guards and explicit comparison precision are implemented; broader scenarios remain. Keep the SQL calculation independent from the Python mock implementation. |
+| Tariff selection | Load multiple tariff periods in Bronze and replace the explicit seven-fixture mapping with general scenario-defined session/tariff associations. Start-time selection is implemented; tariff-boundary pricing remains unsupported. Extend pricing only when a scenario requires it. |
+| Independent oracle | Generalize beyond the seven mapped fixtures to validated scenario energy/duration. Decimal amounts, HALF_UP session-total rounding, per-session input guards and explicit comparison precision are implemented; broader scenarios remain. Keep the SQL calculation independent from the Python mock implementation. |
 | Actual records | Extend computed mock ingestion to external replay and beyond the supported final-CDR subset. Normalization, equivalent-delivery deduplication and conflict guards are implemented; structured Gold conflict reporting, broader Session/CDR contracts and session-ID mapping remain. The original canned fixtures remain regression evidence. |
 | Assertions | The healthy 14-check smoke result is verified in Databricks; independent oracle, CDR count, energy, duration, currency, tariff ID and amount checks have local faulty-input coverage. Add direct baseline/candidate comparison, tariff-version evidence, retry/idempotency and late-event invariants, and structured upstream-failure reporting. |
-| Verdict and evidence | Verify execution tracking and the A/B/C failure demonstration in Databricks. Execution registration, immutable verdict/assertion snapshots and upstream-failure blocking are implemented for the fixed five-scenario inventory. General manifest session inventory, full source/Silver version binding, external-write isolation, first-divergence traces and separate customer overbilling/operator leakage remain. Mock fingerprints identify module/behavior, not executed Git release builds. |
+| Verdict and evidence | Verify execution tracking and the A/B/C failure demonstration in Databricks. Execution registration, immutable verdict/assertion snapshots and upstream-failure blocking are implemented for the fixed seven-run inventory. General manifest session inventory, full source/Silver version binding, external-write isolation, first-divergence traces and separate customer overbilling/operator leakage remain. Mock fingerprints identify module/behavior, not executed Git release builds. |
 | Modeled exposure | Calculate defect-rate delta × assumed monthly sessions × assumed impact per affected session, expose assumptions and separate overbilling from leakage. Label projections as modeled exposure, never actual losses or proven savings. |
 | GitHub automation | Add GitHub Actions, authenticated Databricks execution, exact execution/scenario retrieval, a PASS/FAIL check with evidence links, and required-check configuration for the release gate. Require final Databricks job success as well as a successful execution registration and passing snapshot; never fall back to a previous success. |
-| Verification and demo | Both canned and executable mock FAIL → PASS outcomes are verified in Databricks. The new execution boundary needs deployment, the A/B/C failure proof and interrupted/partial-run checks. Repeat-run stability, Databricks integration tests, broader scenarios and deterministic full-run checks remain. The PDF's 50,000 sessions and EUR 24,380 report are illustrative, not measured results. |
+| Verification and demo | Both canned and executable amount mock FAIL → PASS outcomes are verified in Databricks. The missing-CDR pair and execution boundary need deployment and verification, including the A/B/C failure proof and interrupted/partial-run checks. Repeat-run stability, Databricks integration tests, broader scenarios and deterministic full-run checks remain. The PDF's 50,000 sessions and EUR 24,380 report are illustrative, not measured results. |
 | Runtime access | Define explicit grants when introducing a separate CI/runtime identity; current development relies on schema ownership. |
 
-### Six flagship scenarios still to implement
+### Six flagship scenarios
 
 | Scenario | Required demonstration |
 | --- | --- |
-| Missing CDR | A completed billable session produces no final CDR; report revenue leakage. |
+| Missing CDR | Implemented in the mock; workspace verification pending. A completed billable session produces no candidate final CDR, fails the count check and blocks dependent comparisons. Potential unbilled value is visible through the independent expectation; aggregate revenue-leakage reporting remains missing. |
 | Duplicate charge | A retry produces two different CDR IDs for the same session; preserve and report both. |
 | Wrong energy | Meter order, reset or units distort billed kWh; detect the mismatch against validated evidence. |
 | Wrong tariff | The wrong effective price/version is used; expose the tariff and amount mismatch. |
@@ -586,9 +654,9 @@ Execution history intentionally grows: each successful new full job adds one `jo
 
 ## Next implementation step
 
-1. Pull `dev`, validate, deploy and run the fifteen-task job above. Verify the exact execution's five snapshots and unchanged financial fixture outcomes. Perform the A/B/C failure demonstration: the failed B execution must return `BLOCKED` even while A's PASS remains stored. Confirm another full job succeeds without rewriting earlier snapshots.
-2. Add the missing-CDR scenario through the generator, preserving the same independent expectation. Exercise the existing `final_cdr_count` assertion with a completed billable session and no candidate final CDR; the candidate must fail and dependent value comparisons must be blocked.
-3. Generalize the scenario/session inventory, strengthen session validation and source version binding, then expand to the other five scenarios, seeded event generation, HTTP replay, public-data ingestion, modeled exposure, GitHub gate and documented portfolio demonstration.
+1. Pull `dev`, validate, deploy and run the fifteen-task job above. Verify the exact execution's seven snapshots, the missing-CDR bad run's 8 PASS / 1 FAIL / 5 BLOCKED checks, the corrected run's 14 PASS checks and the unchanged earlier amount outcomes. Perform the A/B/C failure demonstration: the failed B execution must return `BLOCKED` even while A's PASS remains stored. Confirm another full job succeeds without rewriting earlier snapshots.
+2. Add the duplicate-charge scenario: the faulty candidate returns two different final CDR IDs for the same session, while the corrected candidate returns one. Preserve both records, require `final_cdr_count` to fail on two records and block the dependent comparisons instead of summing the charges or selecting one arbitrarily.
+3. Generalize the scenario/session inventory, strengthen session validation and source version binding, then expand to wrong energy, wrong tariff, retry failure and late events, seeded event generation, HTTP replay, public-data ingestion, modeled exposure, GitHub gate and documented portfolio demonstration.
 
 Real card/payment processing, bank/PSP/ERP/settlement integration, full OCPP/OCPI certification, production monitoring/recovery, every tariff/tax/currency, machine learning and confidential operator data remain outside the MVP.
 

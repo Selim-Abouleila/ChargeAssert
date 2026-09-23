@@ -1,7 +1,7 @@
 # Databricks notebook source
 """Run the small mock once, preserve Bronze evidence, then let Silver/Gold run.
 
-The adjacent mock_billing.py is a regular workspace file imported by this
+The adjacent mock modules are regular workspace files imported by this
 notebook. No package installation, HTTP service, polling or scheduling is used.
 """
 
@@ -54,7 +54,7 @@ def verify_stored_rows(table, existing, expected, *, require_complete=False):
 
 def run(spark, dbutils):
     from pyspark.sql import functions as F
-    from mock_billing import generate_mock_runs
+    from mock_missing_cdr import generate_all_mock_runs
 
     spark.sql("SET TIME ZONE 'UTC'")
     names = {}
@@ -72,7 +72,7 @@ def run(spark, dbutils):
             raise ValueError(f"Expected {maximum} smoke input rows in {table}; found {len(rows)}.")
         return [row.asDict() for row in rows]
 
-    generated = generate_mock_runs(
+    generated = generate_all_mock_runs(
         smoke_rows("ocpp_transaction_events_raw", 3),
         smoke_rows("tariffs_raw", 1)[0],
         smoke_rows("run_manifest", 1)[0],
@@ -102,7 +102,7 @@ def run(spark, dbutils):
 
     for table, rows in generated.items():
         verify_stored_rows(table, stored_rows(table), rows, require_complete=True)
-    print("Mock replay complete: mock-amount-bad-v1 and mock-amount-fixed-v1. Silver/Gold will evaluate the CDRs next.")
+    print(f"Mock replay complete: {', '.join(run_ids)}. Silver/Gold will evaluate the CDRs next.")
 
 
 if __name__ == "__main__":

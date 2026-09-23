@@ -1,4 +1,4 @@
-"""Fail-closed execution receipts for the five deterministic MVP fixture runs.
+"""Fail-closed execution receipts for the registered deterministic MVP fixtures.
 
 The existing Gold tables remain current snapshots. Only an immutable snapshot
 joined to a SUCCEEDED job_execution row is a result of this job invocation.
@@ -14,6 +14,7 @@ import re
 EXPECTED_RUN_IDS = (
     "smoke-run-v1", "amount-bad-v1", "amount-fixed-v1",
     "mock-amount-bad-v1", "mock-amount-fixed-v1",
+    "mock-missing-cdr-bad-v1", "mock-missing-cdr-fixed-v1",
 )
 PIPELINE_TASK_KEYS = (
     "create_run_manifest", "create_ocpp_transaction_events_raw",
@@ -90,7 +91,7 @@ def _registration(registration, repair_count):
              "Execution repair identity differs.")
     _require(repair_count == 0, "Repair runs are unsupported; start a new complete job run.")
     _require(json.loads(registration["expected_run_ids_json"]) == list(EXPECTED_RUN_IDS),
-             "Execution inventory differs from the five required runs.")
+             "Execution inventory differs from the required scenario runs.")
     utc(registration["started_at"])
     return identity
 
@@ -155,7 +156,7 @@ def _snapshot_rows(registration, snapshots):
 
 
 def validate_capture(registration, verdicts, assertions, task_states):
-    """Freeze the current five verdicts only after this invocation ran all tasks."""
+    """Freeze the registered verdicts only after this invocation ran all tasks."""
     identity = _registration(registration, 0)
     _require(registration["status"] == "RUNNING", "Only a RUNNING execution can capture Gold.")
     _task_success(task_states, CAPTURE_TASK_KEYS)
@@ -181,7 +182,7 @@ def verify_snapshots(existing, expected, *, require_complete=False):
     """Allow identical retry writes; never overwrite or accept conflicting evidence."""
     by_key = {(row["execution_id"], row["run_id"]): row for row in expected}
     _require(len(expected) == len(EXPECTED_RUN_IDS) and len(by_key) == len(expected),
-             "Expected snapshots must contain five unique execution/run keys.")
+             "Expected snapshots must contain one unique key per registered scenario.")
     seen = set()
     for row in existing:
         key = row["execution_id"], row["run_id"]
@@ -199,7 +200,7 @@ def evaluate_finish(registration, snapshots, task_states, repair_count):
                  "A failed execution cannot be promoted to SUCCEEDED.")
         _task_success(task_states, FINISH_TASK_KEYS)
         _snapshot_rows(registration, snapshots)
-        return "SUCCEEDED", "All required tasks completed and all five execution snapshots were captured."
+        return "SUCCEEDED", f"All required tasks completed and all {len(EXPECTED_RUN_IDS)} execution snapshots were captured."
     except (ValueError, TypeError, KeyError, AttributeError, OverflowError) as error:
         return "FAILED", str(error)
 
@@ -279,7 +280,7 @@ def track(spark, *, mode, job_id, job_run_id, repair_count, job_execution_table_
         _require(len(stored) == 1, "Execution registration is duplicated.")
         _registration(stored[0], repair_count)
         _require(stored[0]["status"] == "RUNNING", "Execution is already terminal; start a new job run.")
-        print(f"Registered execution {identity} with five required scenario runs.")
+        print(f"Registered execution {identity} with {len(EXPECTED_RUN_IDS)} required scenario runs.")
         return
 
     # A malformed dynamic reference must leave a FAILED receipt in the finalizer,
@@ -307,7 +308,7 @@ def track(spark, *, mode, job_id, job_run_id, repair_count, job_execution_table_
           ON target.execution_id = source.execution_id AND target.run_id = source.run_id
           WHEN NOT MATCHED THEN INSERT *""", args={"table_name": execution_verdict_table_name})
         verify_snapshots(snapshot_rows(), expected, require_complete=True)
-        print(f"Captured five immutable verdicts and 70 assertions for execution {identity}.")
+        print(f"Captured {len(expected)} immutable verdicts and {len(assertions)} assertions for execution {identity}.")
         return
 
     status, reason = evaluate_finish(registration, snapshot_rows(), states, repair_count)

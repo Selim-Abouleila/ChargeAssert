@@ -256,6 +256,8 @@ class BundleWiringTests(unittest.TestCase):
                 if key == "generate_mock_billing":
                     self.assertEqual(params, {"run_manifest_table_name", "raw_events_table_name", "raw_tariffs_table_name", "raw_cdrs_table_name"})
                     self.assertTrue((ROOT / "notebooks/mock_billing.py").is_file())
+                    self.assertTrue((ROOT / "notebooks/mock_missing_cdr.py").is_file())
+                    self.assertIn("generate_all_mock_runs", source)
                 else:
                     self.assertEqual(params, {"mode", "job_id", "job_run_id", "repair_count", "job_execution_table_name", "execution_verdict_table_name", "release_verdict_table_name", "assertion_result_table_name", "task_states_json"})
                     self.assertIn(f"              mode: {key.split('_')[0]}", block)

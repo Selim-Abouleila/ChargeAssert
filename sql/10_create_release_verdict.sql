@@ -313,10 +313,73 @@ WHERE run_id IN ('amount-bad-v1', 'amount-fixed-v1',
   'mock-amount-bad-v1', 'mock-amount-fixed-v1')
   AND release_role = 'candidate' AND assertion_id = 'amount_match';
 
+-- A completed session remains billable even when a release produces no CDR.
+-- The missing record must fail cardinality and block all five value comparisons.
+SELECT assert_true(
+  COUNT(*) = 2 AND COUNT(DISTINCT run_id) = 2
+    AND count_if(
+      baseline_verdict = 'PASS' AND required_assertions = 14
+        AND missing_assertions = 0 AND duplicate_assertion_keys = 0
+        AND unexpected_assertions = 0 AND invalid_assertions = 0
+    ) = 2
+    AND count_if(
+      run_id = 'mock-missing-cdr-bad-v1'
+        AND candidate_verdict = 'FAIL' AND verdict = 'FAIL'
+        AND passed_assertions = 8 AND failed_assertions = 1 AND blocked_assertions = 5
+        AND get_json_object(first_problem, '$.release_role') = 'candidate'
+        AND get_json_object(first_problem, '$.session_id') = 'txn-smoke-v1'
+        AND get_json_object(first_problem, '$.assertion_id') = 'final_cdr_count'
+    ) = 1
+    AND count_if(
+      run_id = 'mock-missing-cdr-fixed-v1'
+        AND candidate_verdict = 'PASS' AND verdict = 'PASS'
+        AND passed_assertions = 14 AND failed_assertions = 0 AND blocked_assertions = 0
+        AND first_problem IS NULL
+    ) = 1,
+  'Missing-CDR mock pair must show bad candidate FAIL (8 PASS, 1 missing-CDR FAIL, 5 BLOCKED) and fixed candidate PASS (14 PASS), with both baselines PASS.'
+)
+FROM IDENTIFIER(:table_name)
+WHERE run_id IN ('mock-missing-cdr-bad-v1', 'mock-missing-cdr-fixed-v1');
+
+SELECT assert_true(
+  COUNT(*) = 2 AND COUNT(DISTINCT run_id) = 2
+    AND count_if(
+      session_id = 'txn-smoke-v1'
+        AND CAST(expected_value AS DECIMAL(18,6)) = CAST(1 AS DECIMAL(18,6))
+    ) = 2
+    AND count_if(
+      run_id = 'mock-missing-cdr-bad-v1' AND status = 'FAIL'
+        AND CAST(actual_value AS DECIMAL(18,6)) = CAST(0 AS DECIMAL(18,6))
+        AND difference = CAST(-1 AS DECIMAL(38,6))
+    ) = 1
+    AND count_if(
+      run_id = 'mock-missing-cdr-fixed-v1' AND status = 'PASS'
+        AND CAST(actual_value AS DECIMAL(18,6)) = CAST(1 AS DECIMAL(18,6))
+        AND difference = CAST(0 AS DECIMAL(38,6))
+    ) = 1,
+  'Missing-CDR candidate must report zero final CDRs against one expected; its correction must report exactly one.'
+)
+FROM IDENTIFIER(:assertion_result_table_name)
+WHERE run_id IN ('mock-missing-cdr-bad-v1', 'mock-missing-cdr-fixed-v1')
+  AND release_role = 'candidate' AND assertion_id = 'final_cdr_count';
+
+SELECT assert_true(
+  COUNT(*) = 5 AND COUNT(DISTINCT assertion_id) = 5
+    AND count_if(
+      session_id = 'txn-smoke-v1' AND status = 'BLOCKED'
+        AND expected_value IS NOT NULL AND actual_value IS NULL AND difference IS NULL
+    ) = 5,
+  'Missing candidate CDR must block all five value checks without fabricating an actual value or monetary difference.'
+)
+FROM IDENTIFIER(:assertion_result_table_name)
+WHERE run_id = 'mock-missing-cdr-bad-v1' AND release_role = 'candidate'
+  AND assertion_id IN ('energy_match', 'duration_match', 'currency_match', 'tariff_match', 'amount_match');
+
 SELECT run_id, baseline_verdict, candidate_verdict, verdict,
   required_assertions, passed_assertions, failed_assertions,
   blocked_assertions, missing_assertions, reason
 FROM IDENTIFIER(:table_name)
 WHERE run_id IN ('smoke-run-v1', 'amount-bad-v1', 'amount-fixed-v1',
-  'mock-amount-bad-v1', 'mock-amount-fixed-v1')
+  'mock-amount-bad-v1', 'mock-amount-fixed-v1',
+  'mock-missing-cdr-bad-v1', 'mock-missing-cdr-fixed-v1')
 ORDER BY run_id;

@@ -19,7 +19,7 @@ import unittest
 
 import test_actual_ledger as actual_fixture
 import test_release_verdict as verdict_fixture
-from notebooks.mock_billing import generate_mock_runs
+from notebooks.mock_missing_cdr import MISSING_CDR_RUN_IDS, generate_all_mock_runs
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -36,7 +36,8 @@ TABLES = {
     "assertion_result_table_name": "assertion_result",
 }
 MOCK_RUNS = ("mock-amount-bad-v1", "mock-amount-fixed-v1")
-ALL_RUNS = {"smoke-run-v1", "amount-bad-v1", "amount-fixed-v1", *MOCK_RUNS}
+ALL_MOCK_RUNS = (*MOCK_RUNS, *MISSING_CDR_RUN_IDS)
+ALL_RUNS = {"smoke-run-v1", "amount-bad-v1", "amount-fixed-v1", *ALL_MOCK_RUNS}
 
 
 def statements(sql):
@@ -196,7 +197,7 @@ class AmountScenarioTests(unittest.TestCase):
 
     def load_mock(self):
         """Run actual billing code, then feed its raw rows into the SQL adapters."""
-        generated = generate_mock_runs(
+        generated = generate_all_mock_runs(
             self.query_rows("SELECT * FROM raw_events WHERE run_id = 'smoke-run-v1'"),
             self.query_rows("SELECT * FROM raw_tariffs WHERE run_id = 'smoke-run-v1'")[0],
             self.query_rows("SELECT * FROM run_manifest WHERE run_id = 'smoke-run-v1'")[0],
@@ -253,18 +254,19 @@ class AmountScenarioTests(unittest.TestCase):
             self.assertEqual(json.loads(bad["first_problem"])["assertion_id"], "amount_match")
         for run in ("smoke-run-v1", "amount-fixed-v1", "mock-amount-fixed-v1"):
             self.assertEqual((verdicts[run]["verdict"], verdicts[run]["passed_assertions"], verdicts[run]["failed_assertions"]), ("PASS", 14, 0))
-        failures = self.query_rows("SELECT * FROM assertion_result WHERE status <> 'PASS'")
+        failures = self.query_rows("SELECT * FROM assertion_result WHERE status <> 'PASS' AND run_id NOT LIKE 'mock-missing-cdr-%'")
         self.assertEqual({(row["run_id"], row["release_role"], row["assertion_id"]) for row in failures},
                          {("amount-bad-v1", "candidate", "amount_match"),
                           ("mock-amount-bad-v1", "candidate", "amount_match")})
         for failure in failures:
             self.assertAlmostEqual(failure["difference"], 0.87)
         for row in verdicts.values():
-            for count in ("blocked_assertions", "missing_assertions", "duplicate_assertion_keys",
+            for count in ("missing_assertions", "duplicate_assertion_keys",
                           "unexpected_assertions", "invalid_assertions"):
                 self.assertEqual(row[count], 0, count)
+            self.assertEqual(row["blocked_assertions"], 5 if row["run_id"] == MISSING_CDR_RUN_IDS[0] else 0)
 
-    def test_production_postguards_accept_both_pairs_and_require_each_mock_run(self):
+    def test_production_postguards_accept_all_pairs_and_require_each_mock_run(self):
         self.db.execute(f"CREATE TABLE release_verdict AS {verdict_fixture.source_query()}")
         guard_queries = []
         for path, table in ((EXPECTED_PATH, "expected_ledger"), (VERDICT_PATH, "release_verdict")):
@@ -279,7 +281,7 @@ class AmountScenarioTests(unittest.TestCase):
                     query = query.replace("difference = CAST(", "round(difference, 6) = CAST(")
                     self.db.execute(query).fetchall()
                     guard_queries.append(query)
-        for run in MOCK_RUNS:
+        for run in ALL_MOCK_RUNS:
             with self.subTest(run=run):
                 self.db.execute("SAVEPOINT missing_mock")
                 self.db.execute("DELETE FROM release_verdict WHERE run_id = ?", (run,))
@@ -299,7 +301,7 @@ class AmountScenarioTests(unittest.TestCase):
                 by_run.append(rows)
             self.assertTrue(by_run[0], table)
             self.assertEqual(*by_run, table)
-        rows = self.query_rows("SELECT * FROM raw_cdrs WHERE run_id LIKE 'mock-%' ORDER BY run_id, release_role")
+        rows = self.query_rows("SELECT * FROM raw_cdrs WHERE run_id LIKE 'mock-amount-%' ORDER BY run_id, release_role")
         self.assertEqual(len(rows), 4)
         for row in rows:
             self.assertEqual(row["cdr_id"], "cdr-mock-v1")
@@ -327,6 +329,89 @@ class AmountScenarioTests(unittest.TestCase):
             self.assertAlmostEqual(float(checks[1]["actual_value"]), 6.72 if run.endswith("bad-v1") else 5.85)
         self.assertEqual(self.fixture.verdict(run=MOCK_RUNS[0])["verdict"], "FAIL")
         self.assertEqual(self.fixture.verdict(run=MOCK_RUNS[1])["verdict"], "PASS")
+
+    def test_missing_cdr_pair_preserves_completed_billable_session_and_input_evidence(self):
+        bad, fixed = MISSING_CDR_RUN_IDS
+        for table in ("raw_events", "raw_tariffs", "session_lifecycle", "expected_ledger"):
+            inputs = []
+            for run in (bad, fixed):
+                rows = self.query_rows(f"SELECT * FROM {table} WHERE run_id = '{run}'")
+                self.assertEqual(len(rows), 3 if table == "raw_events" else 1)
+                for row in rows:
+                    row.pop("run_id")
+                inputs.append(rows)
+            self.assertEqual(*inputs, table)
+        session = self.query_rows(f"SELECT * FROM session_lifecycle WHERE run_id = '{bad}'")[0]
+        self.assertEqual((session["status"], session["meter_start_wh"], session["meter_end_wh"]),
+                         ("Completed", 100000, 112500))
+        oracle = self.query_rows(f"SELECT * FROM expected_ledger WHERE run_id = '{bad}'")[0]
+        self.assertEqual((oracle["expected_energy_kwh"], oracle["expected_amount"]), (12.5, 5.63))
+        for table in ("raw_cdrs", "actual_ledger"):
+            bad_rows = self.query_rows(f"SELECT * FROM {table} WHERE run_id = '{bad}'")
+            fixed_rows = self.query_rows(f"SELECT * FROM {table} WHERE run_id = '{fixed}'")
+            self.assertEqual([row["release_role"] for row in bad_rows], ["baseline"])
+            self.assertEqual(sorted(row["release_role"] for row in fixed_rows), ["baseline", "candidate"])
+        manifests = self.query_rows("SELECT * FROM run_manifest WHERE run_id LIKE 'mock-missing-cdr-%' ORDER BY run_id")
+        self.assertEqual(manifests[0]["baseline_sha"], manifests[1]["baseline_sha"])
+        self.assertNotEqual(manifests[0]["candidate_sha"], manifests[1]["candidate_sha"])
+
+    def test_missing_cdr_is_a_count_failure_with_five_blocked_values_and_corrected_pair_passes(self):
+        bad, fixed = MISSING_CDR_RUN_IDS
+        bad_verdict = self.fixture.verdict(run=bad)
+        self.assertEqual((bad_verdict["baseline_verdict"], bad_verdict["candidate_verdict"],
+                          bad_verdict["verdict"]), ("PASS", "FAIL", "FAIL"))
+        self.assertEqual((bad_verdict["required_assertions"], bad_verdict["passed_assertions"],
+                          bad_verdict["failed_assertions"], bad_verdict["blocked_assertions"]), (14, 8, 1, 5))
+        problem = json.loads(bad_verdict["first_problem"])
+        self.assertEqual((problem["release_role"], problem["session_id"], problem["assertion_id"]),
+                         ("candidate", "txn-smoke-v1", "final_cdr_count"))
+        expected_rules = {"oracle_available", "final_cdr_count", "energy_match", "duration_match",
+                          "currency_match", "tariff_match", "amount_match"}
+        rows = self.query_rows(f"SELECT * FROM assertion_result WHERE run_id = '{bad}'")
+        self.assertEqual(len(rows), 14)
+        self.assertEqual({(row["release_role"], row["assertion_id"]) for row in rows},
+                         {(role, rule) for role in ("baseline", "candidate") for rule in expected_rules})
+        candidate = {row["assertion_id"]: row for row in rows if row["release_role"] == "candidate"}
+        self.assertEqual(candidate["oracle_available"]["status"], "PASS")
+        count = candidate["final_cdr_count"]
+        self.assertEqual((float(count["expected_value"]), float(count["actual_value"]),
+                          count["difference"], count["status"]), (1, 0, -1, "FAIL"))
+        self.assertIn("MISSING_CDR", count["message"])
+        for rule in expected_rules - {"oracle_available", "final_cdr_count"}:
+            check = candidate[rule]
+            self.assertEqual(check["status"], "BLOCKED", rule)
+            self.assertIsNotNone(check["expected_value"], rule)
+            self.assertIsNone(check["actual_value"], rule)
+            self.assertIsNone(check["difference"], rule)
+            evidence = json.loads(check["evidence"])
+            self.assertEqual((evidence["cdr_count"], evidence["expected_rows"],
+                              evidence["valid_completed_rows"]), (0, 1, 1))
+            self.assertEqual(evidence["actual_cdrs"], [])
+        self.assertEqual(float(candidate["amount_match"]["expected_value"]), 5.63)
+        fixed_verdict = self.fixture.verdict(run=fixed)
+        self.assertEqual((fixed_verdict["baseline_verdict"], fixed_verdict["candidate_verdict"],
+                          fixed_verdict["verdict"]), ("PASS", "PASS", "PASS"))
+        self.assertEqual((fixed_verdict["required_assertions"], fixed_verdict["passed_assertions"],
+                          fixed_verdict["failed_assertions"], fixed_verdict["blocked_assertions"]), (14, 14, 0, 0))
+        self.assertEqual(self.db.execute("SELECT COUNT(*) FROM assertion_result").fetchone()[0], 98)
+        self.assertEqual(self.db.execute("SELECT COUNT(*) FROM actual_ledger").fetchone()[0], 13)
+
+    def test_missing_cdr_postguards_reject_missing_or_fabricated_assertion_values(self):
+        self.db.execute(f"CREATE TABLE release_verdict AS {verdict_fixture.source_query()}")
+        guards = [adapt_query(statement).replace("IDENTIFIER(:table_name)", "release_verdict")
+                  for statement in statements(VERDICT_PATH.read_text(encoding="utf-8"))
+                  if "assert_true(" in statement and "Missing" in statement]
+        self.assertEqual(len(guards), 3)
+        mutations = (
+            "DELETE FROM assertion_result WHERE run_id = 'mock-missing-cdr-bad-v1' AND release_role = 'candidate' AND assertion_id = 'final_cdr_count'",
+            "UPDATE assertion_result SET actual_value = '0' WHERE run_id = 'mock-missing-cdr-bad-v1' AND release_role = 'candidate' AND assertion_id = 'amount_match'",
+            "UPDATE assertion_result SET difference = -5.63 WHERE run_id = 'mock-missing-cdr-bad-v1' AND release_role = 'candidate' AND assertion_id = 'amount_match'",
+            "UPDATE assertion_result SET status = 'PASS' WHERE run_id = 'mock-missing-cdr-bad-v1' AND release_role = 'candidate' AND assertion_id = 'energy_match'",
+        )
+        def check_guards():
+            for guard in guards:
+                self.db.execute(guard).fetchall()
+        self.assert_rejected_mutations(mutations, check_guards, "Missing")
 
     def test_paired_runs_have_identical_inputs_and_independent_expectations(self):
         for table in ("raw_events", "raw_tariffs", "session_lifecycle", "expected_ledger"):
@@ -361,7 +446,7 @@ class AmountScenarioTests(unittest.TestCase):
         original = {table: self.query_rows(f"SELECT * FROM {table}") for table in tables}
         self.run_seed()
         self.run_seed()
-        self.assertEqual([len(original[table]) for table in tables], [5, 15, 5, 10])
+        self.assertEqual([len(original[table]) for table in tables], [7, 21, 7, 13])
         for table in tables:
             self.assertEqual(self.query_rows(f"SELECT * FROM {table}"), original[table])
         self.refresh_silver()
@@ -387,6 +472,7 @@ class AmountScenarioTests(unittest.TestCase):
         mutations = (
             "DELETE FROM session_lifecycle WHERE run_id = 'amount-bad-v1'",
             "DELETE FROM session_lifecycle WHERE run_id = 'mock-amount-bad-v1'",
+            "DELETE FROM session_lifecycle WHERE run_id = 'mock-missing-cdr-bad-v1'",
             "INSERT INTO session_lifecycle SELECT * FROM session_lifecycle WHERE run_id = 'amount-bad-v1'",
             "UPDATE session_lifecycle SET status = 'In Progress' WHERE run_id = 'amount-bad-v1'",
             "UPDATE session_lifecycle SET ended_at = NULL WHERE run_id = 'amount-bad-v1'",
@@ -400,6 +486,7 @@ class AmountScenarioTests(unittest.TestCase):
         mutations = [
             "DELETE FROM tariff_history WHERE run_id = 'amount-fixed-v1'",
             "DELETE FROM tariff_history WHERE run_id = 'mock-amount-fixed-v1'",
+            "DELETE FROM tariff_history WHERE run_id = 'mock-missing-cdr-fixed-v1'",
             "INSERT INTO tariff_history SELECT * FROM tariff_history WHERE run_id = 'amount-fixed-v1'",
             "UPDATE tariff_history SET valid_from = '2026-08-22T10:01:00Z' WHERE run_id = 'amount-fixed-v1'",
             "UPDATE tariff_history SET valid_to = '2026-08-22T10:30:00Z' WHERE run_id = 'amount-fixed-v1'",

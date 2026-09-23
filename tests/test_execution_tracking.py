@@ -40,8 +40,8 @@ def successful_states(keys):
 class ExecutionFixture(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        # Reuse the full five-run pipeline, not handwritten PASS fixtures. This
-        # includes two intentionally failing candidates and their actual checks.
+        # Reuse the full seven-run pipeline, not handwritten PASS fixtures. This
+        # includes amount failures and the missing-CDR case with blocked checks.
         fixture = amount_fixture.AmountScenarioTests()
         fixture.setUp()
         try:
@@ -95,11 +95,16 @@ class ExecutionTrackingTests(ExecutionFixture):
     def test_complete_snapshot_preserves_real_financial_failures_and_succeeds(self):
         snapshots = self.capture()
         self.assertEqual({row["run_id"] for row in snapshots}, set(tracking.EXPECTED_RUN_IDS))
-        self.assertEqual(len(snapshots), 5)
+        self.assertEqual(len(snapshots), 7)
         self.assertEqual({row["execution_id"] for row in snapshots}, {"7:101:0"})
         verdicts = {row["run_id"]: row["verdict"] for row in snapshots}
         self.assertEqual(verdicts["mock-amount-bad-v1"], "FAIL")
         self.assertEqual(verdicts["mock-amount-fixed-v1"], "PASS")
+        self.assertEqual(verdicts["mock-missing-cdr-bad-v1"], "FAIL")
+        self.assertEqual(verdicts["mock-missing-cdr-fixed-v1"], "PASS")
+        missing_cdr = next(row for row in snapshots if row["run_id"] == "mock-missing-cdr-bad-v1")
+        self.assertEqual((missing_cdr["passed_assertions"], missing_cdr["failed_assertions"],
+                          missing_cdr["blocked_assertions"]), (8, 1, 5))
         self.assertEqual(tracking.evaluate_finish(
             self.registration, snapshots, self.finish_states, 0,
         )[0], "SUCCEEDED")
@@ -354,6 +359,28 @@ class ExecutionConsumptionQueryTests(ExecutionFixture):
                          ("SUCCEEDED", "PASS", "FAIL", "FAIL"))
         self.db.execute("UPDATE execution_verdict SET verdict = 'PASS' WHERE run_id = 'mock-amount-bad-v1'")
         self.assertEqual(self.check("7:101:0", "mock-amount-bad-v1")["verdict"], "BLOCKED")
+
+    def test_missing_cdr_financial_failure_is_readable_after_operational_success(self):
+        self.assertEqual(self.store(self.registration, self.capture()), "SUCCEEDED")
+        bad = self.check("7:101:0", "mock-missing-cdr-bad-v1")
+        self.assertEqual((bad["execution_status"], bad["verdict"], bad["passed_assertions"],
+                          bad["failed_assertions"]), ("SUCCEEDED", "FAIL", 8, 1))
+        fixed = self.check("7:101:0", "mock-missing-cdr-fixed-v1")
+        self.assertEqual((fixed["verdict"], fixed["passed_assertions"], fixed["failed_assertions"]),
+                         ("PASS", 14, 0))
+
+    def test_completed_five_run_history_remains_readable_without_new_scenarios(self):
+        self.store(self.registration, self.capture())
+        self.db.execute("INSERT INTO job_execution VALUES ('7:100:0', 'SUCCEEDED', 'Earlier five-run execution.')")
+        fields = ("run_id", "baseline_verdict", "candidate_verdict", "verdict", "reason", *tracking.COUNT_FIELDS)
+        self.db.execute(f"INSERT INTO execution_verdict (execution_id,{','.join(fields)}) "
+                        f"SELECT '7:100:0',{','.join(fields)} FROM execution_verdict "
+                        "WHERE execution_id = '7:101:0' AND run_id NOT LIKE 'mock-missing-cdr-%'")
+        self.assertEqual(self.db.execute("SELECT COUNT(*) FROM execution_verdict WHERE execution_id = '7:100:0'").fetchone()[0], 5)
+        self.assertEqual(self.check("7:100:0")["verdict"], "PASS")
+        self.assertEqual(self.check("7:100:0", "mock-amount-bad-v1")["verdict"], "FAIL")
+        self.assertEqual(self.check("7:100:0", "mock-missing-cdr-fixed-v1")["verdict"], "BLOCKED")
+        self.assertEqual(self.check("7:101:0", "mock-missing-cdr-fixed-v1")["verdict"], "PASS")
 
     def test_all_pass_labels_still_block_when_any_coverage_count_is_invalid(self):
         self.store(self.registration, self.capture())
