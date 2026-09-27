@@ -6,6 +6,10 @@ bundle:
 include:
   - resources/*.yml
 
+sync:
+  include:
+    - data/ingestion_demo/*.jsonl
+
 variables:
   catalog_name:
     description: Existing Unity Catalog catalog that will contain the ChargeAssert layers.

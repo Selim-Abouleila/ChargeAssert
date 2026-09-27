@@ -1,0 +1,2 @@
+# Keep immutable demo file bytes consistent across Windows and Databricks.
+data/ingestion_demo/*.jsonl text eol=lf

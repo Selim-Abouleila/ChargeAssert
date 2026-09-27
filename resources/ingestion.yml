@@ -1,0 +1,39 @@
+resources:
+  volumes:
+    ocpp_ingestion:
+      catalog_name: ${var.catalog_name}
+      schema_name: ${resources.schemas.bronze.name}
+      name: ocpp_ingestion
+      volume_type: MANAGED
+      comment: Immutable OCPP demo files and persistent Auto Loader checkpoints.
+      lifecycle:
+        prevent_destroy: true
+
+  jobs:
+    publish_ingestion_demo:
+      name: chargeassert_dev_publish_ingestion_demo
+      description: Publish one immutable synthetic OCPP JSON-lines batch; identical publication is a no-op.
+      max_concurrent_runs: 1
+      parameters:
+        - name: batch
+          default: batch_001
+      tasks:
+        - task_key: publish_batch
+          notebook_task:
+            notebook_path: ../notebooks/publish_ingestion_demo.py
+            base_parameters:
+              input_path: /Volumes/${var.catalog_name}/${resources.schemas.bronze.name}/${resources.volumes.ocpp_ingestion.name}/incoming
+              batch: "{{job.parameters.batch}}"
+
+    ingest_ocpp_files:
+      name: chargeassert_dev_ingest_ocpp_files
+      description: Append newly discovered OCPP JSON lines and file metadata to Bronze using a persistent Auto Loader checkpoint.
+      max_concurrent_runs: 1
+      tasks:
+        - task_key: ingest_files
+          notebook_task:
+            notebook_path: ../notebooks/ingest_ocpp_files.py
+            base_parameters:
+              input_path: /Volumes/${var.catalog_name}/${resources.schemas.bronze.name}/${resources.volumes.ocpp_ingestion.name}/incoming
+              checkpoint_path: /Volumes/${var.catalog_name}/${resources.schemas.bronze.name}/${resources.volumes.ocpp_ingestion.name}/checkpoints/ocpp_v1
+              table_name: ${var.catalog_name}.${resources.schemas.bronze.name}.ocpp_events_landing

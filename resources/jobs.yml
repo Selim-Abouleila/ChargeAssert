@@ -2,9 +2,29 @@ resources:
   jobs:
     create_tables:
       name: chargeassert_dev_create_tables
-      description: Creates and verifies the foundational ChargeAssert Bronze tables.
+      description: Runs deterministic billing checks and records immutable verdicts for each complete job execution.
+      max_concurrent_runs: 1
+      parameters:
+        - name: fail_before_gold
+          default: "false"
       tasks:
+        - task_key: begin_execution
+          notebook_task:
+            notebook_path: ../notebooks/track_execution.py
+            base_parameters:
+              mode: begin
+              job_id: "{{job.id}}"
+              job_run_id: "{{job.run_id}}"
+              repair_count: "{{job.repair_count}}"
+              job_execution_table_name: ${var.catalog_name}.chargeassert_dev_bronze.job_execution
+              execution_verdict_table_name: ${var.catalog_name}.chargeassert_dev_gold.execution_verdict
+              release_verdict_table_name: ${var.catalog_name}.chargeassert_dev_gold.release_verdict
+              assertion_result_table_name: ${var.catalog_name}.chargeassert_dev_gold.assertion_result
+              task_states_json: '{}'
+
         - task_key: create_run_manifest
+          depends_on:
+            - task_key: begin_execution
           sql_task:
             warehouse_id: ${var.warehouse_id}
             file:
@@ -26,6 +46,8 @@ resources:
         - task_key: create_session_lifecycle
           depends_on:
             - task_key: create_ocpp_transaction_events_raw
+            - task_key: seed_amount_scenarios
+            - task_key: generate_mock_billing
           sql_task:
             warehouse_id: ${var.warehouse_id}
             file:
@@ -43,3 +65,200 @@ resources:
               path: ../sql/04_create_tariffs_raw.sql
             parameters:
               table_name: ${var.catalog_name}.chargeassert_dev_bronze.tariffs_raw
+
+        - task_key: create_tariff_history
+          depends_on:
+            - task_key: create_tariffs_raw
+            - task_key: seed_amount_scenarios
+            - task_key: generate_mock_billing
+          sql_task:
+            warehouse_id: ${var.warehouse_id}
+            file:
+              path: ../sql/05_create_tariff_history.sql
+            parameters:
+              table_name: ${var.catalog_name}.chargeassert_dev_silver.tariff_history
+              raw_tariffs_table_name: ${var.catalog_name}.chargeassert_dev_bronze.tariffs_raw
+
+        - task_key: create_expected_ledger
+          depends_on:
+            - task_key: create_session_lifecycle
+            - task_key: create_tariff_history
+          sql_task:
+            warehouse_id: ${var.warehouse_id}
+            file:
+              path: ../sql/06_create_expected_ledger.sql
+            parameters:
+              table_name: ${var.catalog_name}.chargeassert_dev_silver.expected_ledger
+              session_lifecycle_table_name: ${var.catalog_name}.chargeassert_dev_silver.session_lifecycle
+              tariff_history_table_name: ${var.catalog_name}.chargeassert_dev_silver.tariff_history
+
+        - task_key: create_ocpi_cdrs_raw
+          depends_on:
+            - task_key: create_run_manifest
+          sql_task:
+            warehouse_id: ${var.warehouse_id}
+            file:
+              path: ../sql/07_create_ocpi_cdrs_raw.sql
+            parameters:
+              table_name: ${var.catalog_name}.chargeassert_dev_bronze.ocpi_cdrs_raw
+              run_manifest_table_name: ${var.catalog_name}.chargeassert_dev_bronze.run_manifest
+
+        - task_key: seed_amount_scenarios
+          depends_on:
+            - task_key: create_ocpp_transaction_events_raw
+            - task_key: create_tariffs_raw
+            - task_key: create_ocpi_cdrs_raw
+          sql_task:
+            warehouse_id: ${var.warehouse_id}
+            file:
+              path: ../sql/11_seed_amount_scenarios.sql
+            parameters:
+              run_manifest_table_name: ${var.catalog_name}.chargeassert_dev_bronze.run_manifest
+              raw_events_table_name: ${var.catalog_name}.chargeassert_dev_bronze.ocpp_transaction_events_raw
+              raw_tariffs_table_name: ${var.catalog_name}.chargeassert_dev_bronze.tariffs_raw
+              raw_cdrs_table_name: ${var.catalog_name}.chargeassert_dev_bronze.ocpi_cdrs_raw
+
+        # Omitting a cluster makes this notebook task use serverless compute.
+        # It runs once per invocation; this job has no schedule or trigger.
+        - task_key: generate_mock_billing
+          depends_on:
+            - task_key: seed_amount_scenarios
+          notebook_task:
+            notebook_path: ../notebooks/generate_mock_billing.py
+            base_parameters:
+              run_manifest_table_name: ${var.catalog_name}.chargeassert_dev_bronze.run_manifest
+              raw_events_table_name: ${var.catalog_name}.chargeassert_dev_bronze.ocpp_transaction_events_raw
+              raw_tariffs_table_name: ${var.catalog_name}.chargeassert_dev_bronze.tariffs_raw
+              raw_cdrs_table_name: ${var.catalog_name}.chargeassert_dev_bronze.ocpi_cdrs_raw
+
+        - task_key: create_actual_ledger
+          depends_on:
+            - task_key: create_ocpi_cdrs_raw
+            - task_key: seed_amount_scenarios
+            - task_key: generate_mock_billing
+          sql_task:
+            warehouse_id: ${var.warehouse_id}
+            file:
+              path: ../sql/08_create_actual_ledger.sql
+            parameters:
+              table_name: ${var.catalog_name}.chargeassert_dev_silver.actual_ledger
+              raw_cdrs_table_name: ${var.catalog_name}.chargeassert_dev_bronze.ocpi_cdrs_raw
+
+        - task_key: create_assertion_result
+          depends_on:
+            - task_key: create_expected_ledger
+            - task_key: create_actual_ledger
+          sql_task:
+            warehouse_id: ${var.warehouse_id}
+            file:
+              path: ../sql/09_create_assertion_result.sql
+            parameters:
+              fail_before_gold: "{{job.parameters.fail_before_gold}}"
+              table_name: ${var.catalog_name}.chargeassert_dev_gold.assertion_result
+              expected_ledger_table_name: ${var.catalog_name}.chargeassert_dev_silver.expected_ledger
+              actual_ledger_table_name: ${var.catalog_name}.chargeassert_dev_silver.actual_ledger
+              session_lifecycle_table_name: ${var.catalog_name}.chargeassert_dev_silver.session_lifecycle
+
+        - task_key: create_release_verdict
+          depends_on:
+            - task_key: create_assertion_result
+          run_if: ALL_SUCCESS
+          sql_task:
+            warehouse_id: ${var.warehouse_id}
+            file:
+              path: ../sql/10_create_release_verdict.sql
+            parameters:
+              table_name: ${var.catalog_name}.chargeassert_dev_gold.release_verdict
+              run_manifest_table_name: ${var.catalog_name}.chargeassert_dev_bronze.run_manifest
+              assertion_result_table_name: ${var.catalog_name}.chargeassert_dev_gold.assertion_result
+              expected_ledger_table_name: ${var.catalog_name}.chargeassert_dev_silver.expected_ledger
+              session_lifecycle_table_name: ${var.catalog_name}.chargeassert_dev_silver.session_lifecycle
+              actual_ledger_table_name: ${var.catalog_name}.chargeassert_dev_silver.actual_ledger
+
+        - task_key: capture_execution
+          depends_on:
+            - task_key: begin_execution
+            - task_key: create_run_manifest
+            - task_key: create_ocpp_transaction_events_raw
+            - task_key: create_tariffs_raw
+            - task_key: create_ocpi_cdrs_raw
+            - task_key: seed_amount_scenarios
+            - task_key: generate_mock_billing
+            - task_key: create_session_lifecycle
+            - task_key: create_tariff_history
+            - task_key: create_expected_ledger
+            - task_key: create_actual_ledger
+            - task_key: create_assertion_result
+            - task_key: create_release_verdict
+          run_if: ALL_SUCCESS
+          notebook_task:
+            notebook_path: ../notebooks/track_execution.py
+            base_parameters:
+              mode: capture
+              job_id: "{{job.id}}"
+              job_run_id: "{{job.run_id}}"
+              repair_count: "{{job.repair_count}}"
+              job_execution_table_name: ${var.catalog_name}.chargeassert_dev_bronze.job_execution
+              execution_verdict_table_name: ${var.catalog_name}.chargeassert_dev_gold.execution_verdict
+              release_verdict_table_name: ${var.catalog_name}.chargeassert_dev_gold.release_verdict
+              assertion_result_table_name: ${var.catalog_name}.chargeassert_dev_gold.assertion_result
+              task_states_json: >-
+                {"begin_execution":"{{tasks.begin_execution.result_state}}",
+                "create_run_manifest":"{{tasks.create_run_manifest.result_state}}",
+                "create_ocpp_transaction_events_raw":"{{tasks.create_ocpp_transaction_events_raw.result_state}}",
+                "create_tariffs_raw":"{{tasks.create_tariffs_raw.result_state}}",
+                "create_ocpi_cdrs_raw":"{{tasks.create_ocpi_cdrs_raw.result_state}}",
+                "seed_amount_scenarios":"{{tasks.seed_amount_scenarios.result_state}}",
+                "generate_mock_billing":"{{tasks.generate_mock_billing.result_state}}",
+                "create_session_lifecycle":"{{tasks.create_session_lifecycle.result_state}}",
+                "create_tariff_history":"{{tasks.create_tariff_history.result_state}}",
+                "create_expected_ledger":"{{tasks.create_expected_ledger.result_state}}",
+                "create_actual_ledger":"{{tasks.create_actual_ledger.result_state}}",
+                "create_assertion_result":"{{tasks.create_assertion_result.result_state}}",
+                "create_release_verdict":"{{tasks.create_release_verdict.result_state}}"}
+
+        # Explicit states distinguish success from excluded tasks. ALL_DONE lets
+        # this task record upstream failures; missing finalization stays blocked.
+        - task_key: finish_execution
+          depends_on:
+            - task_key: begin_execution
+            - task_key: create_run_manifest
+            - task_key: create_ocpp_transaction_events_raw
+            - task_key: create_tariffs_raw
+            - task_key: create_ocpi_cdrs_raw
+            - task_key: seed_amount_scenarios
+            - task_key: generate_mock_billing
+            - task_key: create_session_lifecycle
+            - task_key: create_tariff_history
+            - task_key: create_expected_ledger
+            - task_key: create_actual_ledger
+            - task_key: create_assertion_result
+            - task_key: create_release_verdict
+            - task_key: capture_execution
+          run_if: ALL_DONE
+          notebook_task:
+            notebook_path: ../notebooks/track_execution.py
+            base_parameters:
+              mode: finish
+              job_id: "{{job.id}}"
+              job_run_id: "{{job.run_id}}"
+              repair_count: "{{job.repair_count}}"
+              job_execution_table_name: ${var.catalog_name}.chargeassert_dev_bronze.job_execution
+              execution_verdict_table_name: ${var.catalog_name}.chargeassert_dev_gold.execution_verdict
+              release_verdict_table_name: ${var.catalog_name}.chargeassert_dev_gold.release_verdict
+              assertion_result_table_name: ${var.catalog_name}.chargeassert_dev_gold.assertion_result
+              task_states_json: >-
+                {"begin_execution":"{{tasks.begin_execution.result_state}}",
+                "create_run_manifest":"{{tasks.create_run_manifest.result_state}}",
+                "create_ocpp_transaction_events_raw":"{{tasks.create_ocpp_transaction_events_raw.result_state}}",
+                "create_tariffs_raw":"{{tasks.create_tariffs_raw.result_state}}",
+                "create_ocpi_cdrs_raw":"{{tasks.create_ocpi_cdrs_raw.result_state}}",
+                "seed_amount_scenarios":"{{tasks.seed_amount_scenarios.result_state}}",
+                "generate_mock_billing":"{{tasks.generate_mock_billing.result_state}}",
+                "create_session_lifecycle":"{{tasks.create_session_lifecycle.result_state}}",
+                "create_tariff_history":"{{tasks.create_tariff_history.result_state}}",
+                "create_expected_ledger":"{{tasks.create_expected_ledger.result_state}}",
+                "create_actual_ledger":"{{tasks.create_actual_ledger.result_state}}",
+                "create_assertion_result":"{{tasks.create_assertion_result.result_state}}",
+                "create_release_verdict":"{{tasks.create_release_verdict.result_state}}",
+                "capture_execution":"{{tasks.capture_execution.result_state}}"}
