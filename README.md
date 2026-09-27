@@ -59,11 +59,20 @@ flowchart TB
         Evidence --> Expected["Silver: sessions, tariffs and expected charge"]
         CDRs --> Actual["Silver: reported usage and charge"]
 
-        Expected --> Checks["Gold: compare expected and reported values"]
+        Expected --> Checks
         Actual --> Checks
-        Checks --> Verdict["PASS or FAIL, with reasons and evidence"]
-        Verdict --> History["Saved verdict and check results for each execution"]
+
+        subgraph Gold["GOLD: turn billing checks into business decisions"]
+            Checks["Find wrong amounts, incorrect usage and missing billing records"]
+            Checks --> Verdict["PASS or FAIL, with clear reasons"]
+            Verdict --> History["Save the result and evidence for this exact execution"]
+        end
+
         Execution["Job completion and task status"] --> History
+
+        History --> Customers["Customer trust<br/>Show overcharges and the amount difference"]
+        History --> Revenue["Revenue protection<br/>Flag potentially unbilled sessions"]
+        History --> Release["Release review<br/>Give teams evidence to approve or investigate a change"]
     end
 
     subgraph Ingestion["Separate file ingestion demo"]
@@ -71,15 +80,21 @@ flowchart TB
         Checkpoint["Persistent checkpoint: remember processed files"] --- Loader
         Loader --> Landing["Bronze landing: original lines and source details"]
     end
+
+    style Gold fill:#fff8db,stroke:#a66b00,stroke-width:2px,color:#332400
+    classDef business fill:#edf8f0,stroke:#2f7044,color:#163d23
+    class Customers,Revenue,Release business
 ```
 
 **The file ingestion path does not yet feed the billing checks.** Connecting validated landed events to general session processing is planned.
+
+**Gold provides the business evidence:** billing teams can see how much a reported charge differs from the expected amount, operations teams can find completed sessions with missing billing records, and release owners can review a PASS or FAIL with its supporting evidence. These outputs support human release reviews today; automated GitHub release checks are planned.
 
 | Layer | Purpose | Main records |
 | --- | --- | --- |
 | **Bronze** | Keep the original evidence and the history of job attempts. | Charging events, tariffs, billing records, test inputs and execution status. The separate landing table also keeps source filenames, timestamps and record hashes. |
 | **Silver** | Turn that evidence into records that can be compared. | Session start/end and energy, tariff history, independently expected charges and normalized reported charges. |
-| **Gold** | Explain whether billing passed its checks. | Individual checks, scenario verdicts and saved verdict/check snapshots for each execution. |
+| **Gold** | Help teams catch customer overcharges, find potentially unbilled sessions and make informed release decisions. | Amount differences, missing-record checks, PASS/FAIL verdicts and saved evidence for each execution. |
 
 The [table reference and runbook](docs/01-tables.md) describes the full data model, table rules and job dependencies.
 
@@ -207,10 +222,13 @@ The [remaining-work reference](docs/01-tables.md#remaining-mvp-work) tracks the 
 
 | Location | What it contains |
 | --- | --- |
+| [docs/OVERVIEW.pdf](docs/OVERVIEW.pdf) | Original MVP brief: the business problem, proposed architecture, target scenarios and project scope. |
+| [docs/01-tables.md](docs/01-tables.md) | Current data model, runbook, verification status and remaining work. |
 | [databricks.yml](databricks.yml) | Bundle configuration and the development target. |
 | [resources/](resources/) | Schemas, managed Volume and job definitions. |
 | [sql/](sql/) | Table definitions, billing calculations, assertions and verification queries. |
 | [notebooks/](notebooks/) | Mock billing, execution tracking and file ingestion code. |
 | [data/ingestion_demo/](data/ingestion_demo/) | The two synthetic input files for the ingestion demo. |
 | [tests/](tests/) | Local automated checks. |
-| [docs/01-tables.md](docs/01-tables.md) | Detailed data model, runbook, verification status and remaining work. |
+
+Start with the [MVP brief](docs/OVERVIEW.pdf) for the original plan, then use the [implementation reference](docs/01-tables.md) to see what works today and what remains. The PDF describes the target scope; it is not a claim that every planned feature is complete.
