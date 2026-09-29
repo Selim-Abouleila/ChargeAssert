@@ -42,6 +42,7 @@ resources:
             parameters:
               table_name: ${var.catalog_name}.chargeassert_dev_bronze.ocpp_transaction_events_raw
               run_manifest_table_name: ${var.catalog_name}.chargeassert_dev_bronze.run_manifest
+              landing_table_name: ${var.catalog_name}.${resources.schemas.bronze.name}.ocpp_events_landing
 
         - task_key: create_session_lifecycle
           depends_on:

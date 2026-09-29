@@ -52,50 +52,66 @@ USING (
     ingest_time,
     payload,
     sha2(payload, 256) AS payload_hash
-  FROM VALUES
-    (
-      'smoke-run-v1',
-      'msg-smoke-started-v1',
-      'cs-smoke-001',
-      'txn-smoke-v1',
-      'Started',
-      CAST(0 AS BIGINT),
-      CAST('2026-08-22T10:00:00Z' AS TIMESTAMP),
-      CAST('2026-08-22T10:00:01Z' AS TIMESTAMP),
-      '{"eventType":"Started","timestamp":"2026-08-22T10:00:00Z","triggerReason":"Authorized","seqNo":0,"transactionInfo":{"transactionId":"txn-smoke-v1","chargingState":"Charging"},"meterValue":[{"timestamp":"2026-08-22T10:00:00Z","sampledValue":[{"value":100000,"context":"Transaction.Begin","measurand":"Energy.Active.Import.Register","location":"Outlet","unitOfMeasure":{"unit":"Wh","multiplier":0}}]}],"evse":{"id":1,"connectorId":1},"idToken":{"idToken":"TEST-RFID-001","type":"ISO14443"}}'
-    ),
-    (
-      'smoke-run-v1',
-      'msg-smoke-updated-v1',
-      'cs-smoke-001',
-      'txn-smoke-v1',
-      'Updated',
-      CAST(1 AS BIGINT),
-      CAST('2026-08-22T10:30:00Z' AS TIMESTAMP),
-      CAST('2026-08-22T10:30:01Z' AS TIMESTAMP),
-      '{"eventType":"Updated","timestamp":"2026-08-22T10:30:00Z","triggerReason":"MeterValuePeriodic","seqNo":1,"transactionInfo":{"transactionId":"txn-smoke-v1","chargingState":"Charging","timeSpentCharging":1800},"meterValue":[{"timestamp":"2026-08-22T10:30:00Z","sampledValue":[{"value":106000,"context":"Sample.Periodic","measurand":"Energy.Active.Import.Register","location":"Outlet","unitOfMeasure":{"unit":"Wh","multiplier":0}}]}],"evse":{"id":1,"connectorId":1}}'
-    ),
-    (
-      'smoke-run-v1',
-      'msg-smoke-ended-v1',
-      'cs-smoke-001',
-      'txn-smoke-v1',
-      'Ended',
-      CAST(2 AS BIGINT),
-      CAST('2026-08-22T11:00:00Z' AS TIMESTAMP),
-      CAST('2026-08-22T11:00:01Z' AS TIMESTAMP),
-      '{"eventType":"Ended","timestamp":"2026-08-22T11:00:00Z","triggerReason":"StopAuthorized","seqNo":2,"transactionInfo":{"transactionId":"txn-smoke-v1","chargingState":"Idle","timeSpentCharging":3600,"stoppedReason":"Local"},"meterValue":[{"timestamp":"2026-08-22T11:00:00Z","sampledValue":[{"value":112500,"context":"Transaction.End","measurand":"Energy.Active.Import.Register","location":"Outlet","unitOfMeasure":{"unit":"Wh","multiplier":0}}]}],"evse":{"id":1,"connectorId":1}}'
+  FROM (
+    SELECT * FROM VALUES
+      (
+        'smoke-run-v1',
+        'msg-smoke-started-v1',
+        'cs-smoke-001',
+        'txn-smoke-v1',
+        'Started',
+        CAST(0 AS BIGINT),
+        CAST('2026-08-22T10:00:00Z' AS TIMESTAMP),
+        CAST('2026-08-22T10:00:01Z' AS TIMESTAMP),
+        '{"eventType":"Started","timestamp":"2026-08-22T10:00:00Z","triggerReason":"Authorized","seqNo":0,"transactionInfo":{"transactionId":"txn-smoke-v1","chargingState":"Charging"},"meterValue":[{"timestamp":"2026-08-22T10:00:00Z","sampledValue":[{"value":100000,"context":"Transaction.Begin","measurand":"Energy.Active.Import.Register","location":"Outlet","unitOfMeasure":{"unit":"Wh","multiplier":0}}]}],"evse":{"id":1,"connectorId":1},"idToken":{"idToken":"TEST-RFID-001","type":"ISO14443"}}'
+      ),
+      (
+        'smoke-run-v1',
+        'msg-smoke-updated-v1',
+        'cs-smoke-001',
+        'txn-smoke-v1',
+        'Updated',
+        CAST(1 AS BIGINT),
+        CAST('2026-08-22T10:30:00Z' AS TIMESTAMP),
+        CAST('2026-08-22T10:30:01Z' AS TIMESTAMP),
+        '{"eventType":"Updated","timestamp":"2026-08-22T10:30:00Z","triggerReason":"MeterValuePeriodic","seqNo":1,"transactionInfo":{"transactionId":"txn-smoke-v1","chargingState":"Charging","timeSpentCharging":1800},"meterValue":[{"timestamp":"2026-08-22T10:30:00Z","sampledValue":[{"value":106000,"context":"Sample.Periodic","measurand":"Energy.Active.Import.Register","location":"Outlet","unitOfMeasure":{"unit":"Wh","multiplier":0}}]}],"evse":{"id":1,"connectorId":1}}'
+      ),
+      (
+        'smoke-run-v1',
+        'msg-smoke-ended-v1',
+        'cs-smoke-001',
+        'txn-smoke-v1',
+        'Ended',
+        CAST(2 AS BIGINT),
+        CAST('2026-08-22T11:00:00Z' AS TIMESTAMP),
+        CAST('2026-08-22T11:00:01Z' AS TIMESTAMP),
+        '{"eventType":"Ended","timestamp":"2026-08-22T11:00:00Z","triggerReason":"StopAuthorized","seqNo":2,"transactionInfo":{"transactionId":"txn-smoke-v1","chargingState":"Idle","timeSpentCharging":3600,"stoppedReason":"Local"},"meterValue":[{"timestamp":"2026-08-22T11:00:00Z","sampledValue":[{"value":112500,"context":"Transaction.End","measurand":"Energy.Active.Import.Register","location":"Outlet","unitOfMeasure":{"unit":"Wh","multiplier":0}}]}],"evse":{"id":1,"connectorId":1}}'
+      )
+    AS events (
+      run_id,
+      event_id,
+      charging_station_id,
+      transaction_id,
+      event_type,
+      sequence_number,
+      event_time,
+      ingest_time,
+      payload
     )
-  AS events (
-    run_id,
-    event_id,
-    charging_station_id,
-    transaction_id,
-    event_type,
-    sequence_number,
-    event_time,
-    ingest_time,
-    payload
+
+    UNION ALL
+
+    SELECT
+      get_json_object(raw_record, '$.run_id') AS run_id,
+      get_json_object(raw_record, '$.event_id') AS event_id,
+      get_json_object(raw_record, '$.charging_station_id') AS charging_station_id,
+      get_json_object(get_json_object(raw_record, '$.payload'), '$.transactionInfo.transactionId') AS transaction_id,
+      get_json_object(get_json_object(raw_record, '$.payload'), '$.eventType') AS event_type,
+      CAST(get_json_object(get_json_object(raw_record, '$.payload'), '$.seqNo') AS BIGINT) AS sequence_number,
+      CAST(get_json_object(get_json_object(raw_record, '$.payload'), '$.timestamp') AS TIMESTAMP) AS event_time,
+      ingested_at AS ingest_time,
+      get_json_object(raw_record, '$.payload') AS payload
+    FROM IDENTIFIER(:landing_table_name)
   )
 ) AS source
 ON target.run_id = source.run_id

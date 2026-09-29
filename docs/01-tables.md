@@ -21,7 +21,7 @@ These tables let a team trace a result back to its inputs and the job that produ
 | `job_execution` | Records each Databricks job attempt, whether it finished, and why it failed if it did. |
 | `ocpp_events_landing` | Receives original file lines through Auto Loader, with filenames, timestamps and hashes. |
 
-The manual session generator creates varied charging events as files. Auto Loader loads them into `ocpp_events_landing` and remembers processed files between runs. This path does not yet feed the billing checks or remove duplicate events arriving in different files. The generator stops after each batch; no automatic schedule is configured.
+The manual session generator creates varied charging events as files. Auto Loader loads them into `ocpp_events_landing` and remembers processed files between runs. This Bronze data is then automatically parsed and fed into the downstream Silver and Gold billing checks alongside test fixtures. The generator stops after each batch; no automatic schedule is configured.
 
 ## Silver: work out what should have been billed
 
