@@ -349,15 +349,20 @@ databricks bundle run -t dev combined_ingestion --params batch_id=sessions-repai
 databricks bundle run -t dev evaluate_generated_batch --params batch_id=sessions-repaired-001,candidate_mode=healthy
 ```
 
-The combined job runs generation before ingestion, using the same child jobs available for individual runs. Expect six landed event rows for two sessions. The evaluator should then report two sessions, 28 assertions and PASS for the baseline, candidate and overall verdict.
+The last two commands do the following:
 
-Next use the same batch with a deliberately wrong candidate:
+- **Create and load sessions:** `combined_ingestion` generates two simulated charging sessions and uses Auto Loader to load their six events into Bronze. `seed=42` makes the data repeatable.
+- **Check correct billing:** `evaluate_generated_batch` with `candidate_mode=healthy` calculates the expected charges, compares both simulated billing versions and saves the checks in Gold. Expect **28 PASS checks**, with baseline, candidate and overall PASS.
+
+**Test whether bad billing is caught.** Use the same sessions with deliberately wrong candidate bills:
 
 ```bash
 databricks bundle run -t dev evaluate_generated_batch --params batch_id=sessions-repaired-001,candidate_mode=amount_error
 ```
 
-The candidate adds EUR 0.87 to each session's calculated bill. Expect **26 PASS / 2 FAIL / 0 BLOCKED**, with baseline PASS and candidate/overall FAIL. Only the two candidate `amount_match` checks should fail. This financial FAIL is an expected test result; the Databricks job should still finish successfully and save it.
+This adds EUR 0.87 to each candidate bill. Expect **26 PASS / 2 FAIL / 0 BLOCKED**: one incorrect charge caught per session. Baseline stays PASS; candidate and overall become FAIL. Only the two candidate `amount_match` checks should fail. The job itself should succeed because it detected and saved the errors.
+
+Each command runs once and stops. Nothing runs continuously.
 
 Run the healthy evaluation again:
 

@@ -195,15 +195,20 @@ databricks bundle run -t dev combined_ingestion --params batch_id=sessions-repai
 databricks bundle run -t dev evaluate_generated_batch --params batch_id=sessions-repaired-001,candidate_mode=healthy
 ```
 
-Wait for each command to succeed. Expect **two sessions and 28 PASS checks**. `combined_ingestion` calls the existing generation and ingestion jobs in order, so the same ingestion job controls all writes to its checkpoint. It stops at Bronze; `evaluate_generated_batch` continues through Gold.
+Wait for each command to finish:
 
-Then check a deliberate EUR 0.87 overcharge on each candidate session, using the same landed events:
+- **`combined_ingestion` creates and loads the sessions.** It generates two simulated sessions, then uses Auto Loader to load their six events into Bronze. `seed=42` makes the data repeatable.
+- **`evaluate_generated_batch` checks the bills.** With `candidate_mode=healthy`, it calculates the expected charges, compares both simulated billing versions and saves the results in Gold. Expect **28 PASS checks**.
+
+**Test whether bad billing is caught.** Use the same sessions, but add EUR 0.87 to each candidate bill:
 
 ```bash
 databricks bundle run -t dev evaluate_generated_batch --params batch_id=sessions-repaired-001,candidate_mode=amount_error
 ```
 
-Expect **26 PASS and 2 FAIL checks**: baseline PASS, candidate FAIL, overall FAIL. The job should still succeed because it completed the checks and saved the evidence. Running `candidate_mode=healthy` again should give 28 PASS checks under a new execution ID.
+Expect **26 PASS and 2 FAIL checks**: one incorrect charge caught per session. Baseline stays PASS; candidate and overall become FAIL. The job itself should succeed because it detected and saved the errors. Running `candidate_mode=healthy` again should give 28 PASS checks under a new execution ID.
+
+Each command runs once and stops. Nothing runs continuously.
 
 The evaluator prints its `execution_id`. Use it with [the generated-execution check](sql/15_check_generated_billing.sql). The [generated billing runbook](docs/02-runbook.md#evaluate-generated-batches-through-gold) explains the new tables, expected counts and failed-attempt checks.
 
