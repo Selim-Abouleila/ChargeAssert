@@ -58,3 +58,34 @@ resources:
               input_path: /Volumes/${var.catalog_name}/${resources.schemas.bronze.name}/${resources.volumes.ocpp_ingestion.name}/incoming
               checkpoint_path: /Volumes/${var.catalog_name}/${resources.schemas.bronze.name}/${resources.volumes.ocpp_ingestion.name}/checkpoints/ocpp_v1
               table_name: ${var.catalog_name}.${resources.schemas.bronze.name}.ocpp_events_landing
+
+    combined_ingestion:
+      name: chargeassert_dev_combined_ingestion
+      description: Generate synthetic sessions and ingest them in one run.
+      max_concurrent_runs: 1
+      parameters:
+        - name: batch_id
+          default: sessions-001
+        - name: session_count
+          default: "2"
+        - name: seed
+          default: "42"
+      tasks:
+        - task_key: generate_sessions
+          notebook_task:
+            notebook_path: ../notebooks/generate_sessions.py
+            base_parameters:
+              input_path: /Volumes/${var.catalog_name}/${resources.schemas.bronze.name}/${resources.volumes.ocpp_ingestion.name}/incoming
+              batch_id: "{{job.parameters.batch_id}}"
+              session_count: "{{job.parameters.session_count}}"
+              seed: "{{job.parameters.seed}}"
+
+        - task_key: ingest_ocpp_files
+          depends_on:
+            - task_key: generate_sessions
+          notebook_task:
+            notebook_path: ../notebooks/ingest_ocpp_files.py
+            base_parameters:
+              input_path: /Volumes/${var.catalog_name}/${resources.schemas.bronze.name}/${resources.volumes.ocpp_ingestion.name}/incoming
+              checkpoint_path: /Volumes/${var.catalog_name}/${resources.schemas.bronze.name}/${resources.volumes.ocpp_ingestion.name}/checkpoints/ocpp_v1
+              table_name: ${var.catalog_name}.${resources.schemas.bronze.name}.ocpp_events_landing
