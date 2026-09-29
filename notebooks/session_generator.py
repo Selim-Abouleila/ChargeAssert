@@ -56,21 +56,6 @@ def generate_batch(batch_id, session_count, seed):
         "tariff": {"id": "generated-energy-v1", "currency": "EUR", "price_per_kwh": "0.45"},
     }
     rows = []
-    
-    # 1. Generate the Tariff record
-    tariff_payload = {
-        "id": "generated-energy-v1",
-        "currency": "EUR",
-        "elements": [{"price_components": [{"type": "ENERGY", "price": 0.45, "step_size": 1}]}]
-    }
-    rows.append(_json({
-        "schema_version": 1,
-        "run_id": f"generated-v1-{batch_id}",
-        "tariff_id": "generated-energy-v1",
-        "payload": _json(tariff_payload),
-        "generator": metadata,
-    }))
-
     for index in range(session_count):
         identity = hashlib.sha256(f"{GENERATOR_VERSION}:{batch_id}:{index}".encode()).hexdigest()[:24]
         started = BASE_TIME + timedelta(minutes=rng.randint(0, 7 * 24 * 60 - 1))
@@ -122,27 +107,6 @@ def generate_batch(batch_id, session_count, seed):
                 "payload": _json(payload),
                 "generator": metadata,
             }))
-
-        # 2. Generate a perfectly matching fake CDR (Actual Ledger) for the Gold Layer
-        cdr_amount = round((energy_wh / 1000.0) * 0.45, 2)
-        cdr_payload = {
-            "country_code": "FR",
-            "party_id": "CAS",
-            "id": f"cdr-{identity}",
-            "session_id": f"txn-{identity}",
-            "currency": "EUR",
-            "credit": False,
-            "total_cost": {"excl_vat": cdr_amount}
-        }
-        rows.append(_json({
-            "schema_version": 1,
-            "run_id": f"generated-v1-{batch_id}",
-            "cdr_id": f"cdr-{identity}",
-            "release_role": "candidate",
-            "payload": _json(cdr_payload),
-            "generator": metadata,
-        }))
-
     content = "\n".join(rows) + "\n"
     if len(content.encode("utf-8")) > MAX_BATCH_BYTES:
         raise ValueError("Generated batch exceeds the 4 MiB publisher limit.")

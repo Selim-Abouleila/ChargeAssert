@@ -1,5 +1,4 @@
--- This fixture pipeline processes only its seven registered runs.
--- Other retained evidence is isolated and must use its own explicit pipeline.
+-- Isolated generated pipeline: every source read and derived deletion is scoped to :run_id.
 CREATE TABLE IF NOT EXISTS IDENTIFIER(:table_name) (
   run_id STRING NOT NULL
     COMMENT 'ChargeAssert test run that owns this tariff snapshot.',
@@ -35,7 +34,7 @@ WITH parsed_tariffs AS (
       'STRUCT<id: STRING, currency: STRING, elements: ARRAY<STRUCT<price_components: ARRAY<STRUCT<type: STRING, price: DECIMAL(18,6), step_size: INT>>>>>',
       map('mode', 'FAILFAST')
     ) AS tariff
-  FROM (SELECT * FROM IDENTIFIER(:raw_tariffs_table_name) WHERE run_id IN ('smoke-run-v1', 'amount-bad-v1', 'amount-fixed-v1', 'mock-amount-bad-v1', 'mock-amount-fixed-v1', 'mock-missing-cdr-bad-v1', 'mock-missing-cdr-fixed-v1'))
+  FROM (SELECT * FROM IDENTIFIER(:raw_tariffs_table_name) WHERE run_id = :run_id)
 )
 SELECT assert_true(
   COUNT(*) = count_if(COALESCE(
@@ -69,7 +68,7 @@ FROM parsed_tariffs;
 WITH distinct_tariffs AS (
   SELECT DISTINCT
     run_id, tariff_id, valid_from, valid_to, currency, payload, payload_hash
-  FROM (SELECT * FROM IDENTIFIER(:raw_tariffs_table_name) WHERE run_id IN ('smoke-run-v1', 'amount-bad-v1', 'amount-fixed-v1', 'mock-amount-bad-v1', 'mock-amount-fixed-v1', 'mock-missing-cdr-bad-v1', 'mock-missing-cdr-fixed-v1'))
+  FROM (SELECT * FROM IDENTIFIER(:raw_tariffs_table_name) WHERE run_id = :run_id)
 ), ordered_periods AS (
   SELECT
     *,
@@ -103,7 +102,7 @@ USING (
       map('mode', 'FAILFAST')
     ).elements, 1).price_components AS price_components,
     payload_hash AS source_payload_hash
-  FROM (SELECT * FROM IDENTIFIER(:raw_tariffs_table_name) WHERE run_id IN ('smoke-run-v1', 'amount-bad-v1', 'amount-fixed-v1', 'mock-amount-bad-v1', 'mock-amount-fixed-v1', 'mock-missing-cdr-bad-v1', 'mock-missing-cdr-fixed-v1'))
+  FROM (SELECT * FROM IDENTIFIER(:raw_tariffs_table_name) WHERE run_id = :run_id)
 ) AS source
 ON target.run_id = source.run_id
 AND target.tariff_id = source.tariff_id
@@ -130,34 +129,3 @@ WHEN NOT MATCHED THEN INSERT (
   source.price_components,
   source.source_payload_hash
 );
-
--- Verify the normalized smoke tariff, including its validity and provenance.
-SELECT assert_true(
-  COUNT(*) = 1
-    AND count_if(
-      history.tariff_id = 'tariff-smoke-v1'
-        AND history.currency = 'EUR'
-        AND history.valid_from = CAST('2026-01-01T00:00:00Z' AS TIMESTAMP)
-        AND history.valid_to = CAST('2026-12-31T23:59:59Z' AS TIMESTAMP)
-        AND size(history.price_components) = 1
-        AND try_element_at(history.price_components, 1).type = 'ENERGY'
-        AND try_element_at(history.price_components, 1).price = CAST(0.45 AS DECIMAL(18,6))
-        AND try_element_at(history.price_components, 1).step_size = 1
-        AND history.source_payload_hash = raw.payload_hash
-        AND history.source_payload_hash = sha2(raw.payload, 256)
-    ) = 1,
-  'Silver tariff_history must contain one smoke period with the correct EUR 0.45/kWh component and Bronze payload hash.'
-)
-FROM IDENTIFIER(:table_name) AS history
-LEFT JOIN (
-  SELECT DISTINCT run_id, tariff_id, valid_from, payload, payload_hash
-  FROM (SELECT * FROM IDENTIFIER(:raw_tariffs_table_name) WHERE run_id IN ('smoke-run-v1', 'amount-bad-v1', 'amount-fixed-v1', 'mock-amount-bad-v1', 'mock-amount-fixed-v1', 'mock-missing-cdr-bad-v1', 'mock-missing-cdr-fixed-v1'))
-) AS raw
-  ON history.run_id = raw.run_id
-  AND history.tariff_id = raw.tariff_id
-  AND history.valid_from = raw.valid_from
-WHERE history.run_id = 'smoke-run-v1';
-
-SELECT *
-FROM IDENTIFIER(:table_name)
-WHERE run_id = 'smoke-run-v1';

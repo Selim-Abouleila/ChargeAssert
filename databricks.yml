@@ -9,6 +9,8 @@ include:
 sync:
   include:
     - data/ingestion_demo/*.jsonl
+    # The generated evaluator reads these files from the deployed workspace.
+    - sql/generated/*.sql
 
 variables:
   catalog_name:

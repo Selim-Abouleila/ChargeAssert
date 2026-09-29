@@ -283,12 +283,12 @@ class AssertionResultTests(unittest.TestCase):
         self.assertTrue(all(r["status"] == "PASS" for r in self.rows()))
 
     def test_runs_and_releases_are_isolated(self):
-        self.add_oracle(run="other-run")
-        self.add_actual(run="other-run", role="baseline")
-        self.add_actual(run="other-run", role="candidate", amount=6.5)
+        self.add_oracle(run="amount-bad-v1")
+        self.add_actual(run="amount-bad-v1", role="baseline")
+        self.add_actual(run="amount-bad-v1", role="candidate", amount=6.5)
         self.assertTrue(all(r["status"] == "PASS" for r in self.rules().values()))
-        self.assertTrue(all(r["status"] == "PASS" for r in self.rules(run="other-run", role="baseline").values()))
-        self.assertEqual(self.rules(run="other-run")["amount_match"]["status"], "FAIL")
+        self.assertTrue(all(r["status"] == "PASS" for r in self.rules(run="amount-bad-v1", role="baseline").values()))
+        self.assertEqual(self.rules(run="amount-bad-v1")["amount_match"]["status"], "FAIL")
         self.assertEqual(len(self.rows()), 28)
 
     def test_evidence_retains_oracle_and_all_retry_hashes_without_duplicate_charge(self):

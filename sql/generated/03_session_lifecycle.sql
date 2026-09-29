@@ -1,5 +1,4 @@
--- This fixture pipeline processes only its seven registered runs.
--- Other retained evidence is isolated and must use its own explicit pipeline.
+-- Isolated generated pipeline: every source read and derived deletion is scoped to :run_id.
 CREATE TABLE IF NOT EXISTS IDENTIFIER(:table_name) (
   run_id STRING NOT NULL
     COMMENT 'ChargeAssert test run for this session.',
@@ -33,11 +32,11 @@ USING (
     MAX(CASE WHEN event_type = 'Ended' THEN event_time END) AS ended_at,
     CAST(MAX(CASE WHEN event_type = 'Started' THEN get_json_object(payload, '$.meterValue[0].sampledValue[0].value') END) AS BIGINT) AS meter_start_wh,
     CAST(MAX(CASE WHEN event_type = 'Ended' THEN get_json_object(payload, '$.meterValue[0].sampledValue[0].value') END) AS BIGINT) AS meter_end_wh,
-    CASE 
+    CASE
       WHEN count_if(event_type = 'Ended') > 0 THEN 'Completed'
-      ELSE 'In Progress' 
+      ELSE 'In Progress'
     END AS status
-  FROM (SELECT * FROM IDENTIFIER(:raw_events_table_name) WHERE run_id IN ('smoke-run-v1', 'amount-bad-v1', 'amount-fixed-v1', 'mock-amount-bad-v1', 'mock-amount-fixed-v1', 'mock-missing-cdr-bad-v1', 'mock-missing-cdr-fixed-v1'))
+  FROM (SELECT * FROM IDENTIFIER(:raw_events_table_name) WHERE run_id = :run_id)
   GROUP BY run_id, transaction_id
 ) AS source
 ON target.run_id = source.run_id
@@ -65,20 +64,3 @@ WHEN NOT MATCHED THEN INSERT (
   source.meter_end_wh,
   source.status
 );
-
--- Fail the job unless the session is correctly aggregated
-SELECT assert_true(
-  COUNT(*) = 1
-    AND count_if(session_id = 'txn-smoke-v1') = 1
-    AND count_if(status = 'Completed') = 1
-    AND count_if(meter_start_wh = 100000) = 1
-    AND count_if(meter_end_wh = 112500) = 1,
-  'Silver session_lifecycle must correctly aggregate the smoke test session.'
-)
-FROM IDENTIFIER(:table_name)
-WHERE run_id = 'smoke-run-v1';
-
--- Expose the aggregated row in the task output
-SELECT *
-FROM IDENTIFIER(:table_name)
-WHERE run_id = 'smoke-run-v1';

@@ -49,16 +49,6 @@ USING (
     currency,
     payload
   )
-  UNION ALL
-  SELECT
-    get_json_object(raw_record, '$.run_id') AS run_id,
-    get_json_object(raw_record, '$.tariff_id') AS tariff_id,
-    CAST('2026-01-01T00:00:00Z' AS TIMESTAMP) AS valid_from,
-    CAST(NULL AS TIMESTAMP) AS valid_to,
-    get_json_object(get_json_object(raw_record, '$.payload'), '$.currency') AS currency,
-    get_json_object(raw_record, '$.payload') AS payload
-  FROM IDENTIFIER(:landing_table_name)
-  WHERE get_json_object(raw_record, '$.tariff_id') IS NOT NULL
 ) AS source
 ON target.run_id = source.run_id
 AND target.tariff_id = source.tariff_id

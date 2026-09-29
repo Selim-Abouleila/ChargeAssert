@@ -1,5 +1,4 @@
--- This fixture pipeline processes only its seven registered runs.
--- Other retained evidence is isolated and must use its own explicit pipeline.
+-- Isolated generated pipeline: every source read and derived deletion is scoped to :run_id.
 CREATE TABLE IF NOT EXISTS IDENTIFIER(:table_name) (
   run_id STRING NOT NULL,
   release_role STRING NOT NULL,
@@ -47,7 +46,7 @@ USING (
         'STRUCT<country_code: STRING, party_id: STRING, id: STRING, session_id: STRING, start_date_time: TIMESTAMP, end_date_time: TIMESTAMP, currency: STRING, total_energy: DECIMAL(18,6), total_time: DECIMAL(18,6), total_cost: STRUCT<excl_vat: DECIMAL(18,6)>, credit: BOOLEAN, charging_periods: ARRAY<STRUCT<tariff_id: STRING>>>',
         map('mode', 'FAILFAST')
       ) AS cdr
-    FROM (SELECT * FROM IDENTIFIER(:raw_cdrs_table_name) WHERE run_id IN ('smoke-run-v1', 'amount-bad-v1', 'amount-fixed-v1', 'mock-amount-bad-v1', 'mock-amount-fixed-v1', 'mock-missing-cdr-bad-v1', 'mock-missing-cdr-fixed-v1'))
+    FROM (SELECT * FROM IDENTIFIER(:raw_cdrs_table_name) WHERE run_id = :run_id)
   ), validated_cdrs AS (
     SELECT
       run_id,
@@ -165,34 +164,3 @@ WHEN NOT MATCHED THEN INSERT (
   source.actual_duration_hours, source.actual_amount, source.tariff_id,
   source.source_payload_hashes
 );
-
--- Fixture check only. Financial differences in other runs remain reported
--- values for the future Gold assertions; this task never looks up expectations.
-SELECT assert_true(
-  COUNT(*) = 2
-    AND count_if(release_role = 'baseline') = 1
-    AND count_if(release_role = 'candidate') = 1
-    AND count_if(
-      country_code = 'FR'
-        AND party_id = 'CAS'
-        AND cdr_id = 'cdr-smoke-v1'
-        AND session_id = 'txn-smoke-v1'
-        AND cdr_type = 'FINAL'
-        AND started_at = CAST('2026-08-22T10:00:00Z' AS TIMESTAMP)
-        AND ended_at = CAST('2026-08-22T11:00:00Z' AS TIMESTAMP)
-        AND currency = 'EUR'
-        AND actual_energy_kwh = CAST(12.5 AS DECIMAL(18,6))
-        AND actual_duration_hours = CAST(1 AS DECIMAL(18,6))
-        AND actual_amount = CAST(5.63 AS DECIMAL(18,6))
-        AND tariff_id = 'tariff-smoke-v1'
-        AND size(source_payload_hashes) >= 1
-    ) = 2,
-  'Expected two actual smoke ledger rows, one per release: 12.5 kWh, one hour and EUR 5.63, with source hashes.'
-)
-FROM IDENTIFIER(:table_name)
-WHERE run_id = 'smoke-run-v1';
-
-SELECT *
-FROM IDENTIFIER(:table_name)
-WHERE run_id = 'smoke-run-v1'
-ORDER BY release_role;

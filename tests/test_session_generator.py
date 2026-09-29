@@ -66,6 +66,32 @@ def session_groups(content):
 
 
 class SessionGeneratorTests(unittest.TestCase):
+    def test_default_v1_batch_keeps_its_original_published_bytes(self):
+        # Frozen from 9777721, before billing records were mixed into v1 files.
+        # Retained files are immutable, so even formatting changes need a new
+        # producer contract instead of changing an existing batch's bytes.
+        content = generator.generate_batch("sessions-001", 2, 42).encode("utf-8")
+        self.assertEqual(hashlib.sha256(content).hexdigest(),
+                         "cbd7dc722f40f4629f0bfd30e18ad80a62bd76f2b55ff81d7ce606042eba84c6")
+
+    def test_v1_batches_contain_only_three_event_envelopes_per_session(self):
+        event_fields = {
+            "schema_version", "run_id", "event_id", "charging_station_id",
+            "payload", "generator",
+        }
+        for count, seed in ((1, 0), (2, 42), (8, 2**32 - 1)):
+            with self.subTest(count=count, seed=seed):
+                rows = rows_in(generator.generate_batch("envelope", count, seed))
+                self.assertEqual(len(rows), count * 3)
+                for row in rows:
+                    self.assertEqual(set(row), event_fields)
+                    self.assertEqual(row["schema_version"], 1)
+                    self.assertEqual(row["generator"]["version"], "sessions-v1")
+                self.assertEqual(
+                    [json.loads(row["payload"])["eventType"] for row in rows],
+                    ["Started", "Updated", "Ended"] * count,
+                )
+
     def test_two_sessions_have_complete_distinct_ocpp_events_and_provenance(self):
         content = generator.generate_batch("demo_one", 2, 42)
         self.assertTrue(content.endswith("\n"))
@@ -216,6 +242,20 @@ class SessionGeneratorTests(unittest.TestCase):
                     generator.publish_batch(fs, INPUT_PATH, "batch", 2, 42)
                 self.assertEqual(fs.files[path], conflicting)
                 self.assertEqual(fs.puts, [])
+
+    def test_existing_mixed_event_and_billing_file_is_preserved_as_conflicting_evidence(self):
+        fs = FakeFileSystem()
+        path = INPUT_PATH + "/generated-sessions-001.jsonl"
+        mixed = (
+            b'{"tariff_id":"generated-energy-v1","payload":"{}"}\n'
+            + generator.generate_batch("sessions-001", 2, 42).encode("utf-8")
+            + b'{"cdr_id":"cdr-existing","release_role":"candidate","payload":"{}"}\n'
+        )
+        fs.files[path] = mixed
+        with self.assertRaisesRegex(ValueError, "refusing to overwrite"):
+            generator.publish_batch(fs, INPUT_PATH, "sessions-001", 2, 42)
+        self.assertEqual(fs.files[path], mixed)
+        self.assertEqual(fs.puts, [])
 
     def test_permission_and_transport_failures_propagate(self):
         for operation in ("mkdirs", "ls", "head", "put"):

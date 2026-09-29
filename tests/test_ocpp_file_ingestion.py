@@ -172,28 +172,75 @@ class FileIngestionTests(unittest.TestCase):
 
 
 class IngestionBundleTests(unittest.TestCase):
+    def setUp(self):
+        self.resource = (ROOT / "resources/ingestion.yml").read_text(encoding="utf-8")
+        # Isolate each resource so a later job cannot supply missing settings.
+        # These checks cover our wiring, not the complete Databricks YAML schema.
+        jobs_text = self.resource.split("\n  jobs:\n", 1)[1]
+        self.jobs = dict(re.findall(
+            r"(?ms)^    (\w+):\n(.*?)(?=^    \w+:\n|\Z)", jobs_text,
+        ))
+
     def test_separate_jobs_resolve_to_the_runtime_contract_and_keep_checkpoint_storage(self):
-        resource = (ROOT / "resources/ingestion.yml").read_text(encoding="utf-8")
+        resource = self.resource
         self.assertIn("      volume_type: MANAGED", resource)
         self.assertIn("        prevent_destroy: true", resource)
-        self.assertEqual(resource.count("      max_concurrent_runs: 1"), 3)
-        self.assertNotRegex(resource, r"(?m)^      (?:schedule|trigger|continuous):")
+        self.assertEqual(set(self.jobs), {
+            "generate_sessions", "publish_ingestion_demo", "ingest_ocpp_files", "combined_ingestion",
+        })
+        for name, job in self.jobs.items():
+            with self.subTest(job=name):
+                self.assertEqual(re.findall(r"(?m)^      max_concurrent_runs: (.+)$", job), ["1"])
+                self.assertNotRegex(job, r"(?m)^      (?:schedule|trigger|continuous):")
         self.assertNotRegex(resource, r"(?m)^          (?:new_cluster|existing_cluster_id|job_cluster_key):")
         references = {
             "${var.catalog_name}": "workspace", "${resources.schemas.bronze.name}": "chargeassert_dev_bronze",
             "${resources.volumes.ocpp_ingestion.name}": "ocpp_ingestion",
         }
-        resolved = resource
+        ingest_block = self.jobs["ingest_ocpp_files"]
         for key, value in references.items():
-            resolved = resolved.replace(key, value)
-        ingest_block = resolved.split("    ingest_ocpp_files:\n")[1]
+            ingest_block = ingest_block.replace(key, value)
         parameters = dict(re.findall(r"(?m)^              (\w+): (.+)$", ingest_block))
         ingestion.validate_config(**parameters)
-        self.assertIn('batch: "{{job.parameters.batch}}"', resource)
+        self.assertIn('batch: "{{job.parameters.batch}}"', self.jobs["publish_ingestion_demo"])
         for path in re.findall(r"(?m)^            notebook_path: (.+)$", resource):
             notebook = ROOT / "resources" / path
             self.assertTrue(notebook.read_text(encoding="utf-8").startswith("# Databricks notebook source"))
         self.assertIn("data/ingestion_demo/*.jsonl", (ROOT / "databricks.yml").read_text(encoding="utf-8"))
+
+    def test_combined_job_forwards_parameters_and_waits_for_successful_generation(self):
+        combined = self.jobs["combined_ingestion"]
+        defaults = dict(re.findall(r'(?m)^        - name: (\w+)\n          default: "?([^"\n]+)"?$', combined))
+        self.assertEqual(defaults, {"batch_id": "sessions-001", "session_count": "2", "seed": "42"})
+        tasks = dict(re.findall(
+            r"(?ms)^        - task_key: (\w+)\n(.*?)(?=^        - task_key: |\Z)", combined,
+        ))
+        self.assertEqual(list(tasks), ["generate_sessions", "ingest_ocpp_files"])
+        for task, child in (("generate_sessions", "generate_sessions"), ("ingest_ocpp_files", "ingest_ocpp_files")):
+            with self.subTest(task=task):
+                self.assertNotIn("notebook_task:", tasks[task])
+                self.assertIn("          run_job_task:\n", tasks[task])
+                self.assertEqual(re.findall(r"(?m)^            job_id: (.+)$", tasks[task]),
+                                 ["${resources.jobs." + child + ".id}"])
+        forwarded = dict(re.findall(r'(?m)^              (\w+): "(.+)"$', tasks["generate_sessions"]))
+        self.assertIn("            job_parameters:\n", tasks["generate_sessions"])
+        self.assertEqual(forwarded, {
+            name: "{{job.parameters." + name + "}}" for name in ("batch_id", "session_count", "seed")
+        })
+        self.assertNotIn("depends_on:", tasks["generate_sessions"])
+        self.assertIn("          depends_on:\n            - task_key: generate_sessions\n", tasks["ingest_ocpp_files"])
+        self.assertEqual(re.findall(r"(?m)^          run_if: (.+)$", tasks["ingest_ocpp_files"]), ["ALL_SUCCESS"])
+        self.assertNotIn("job_parameters:", tasks["ingest_ocpp_files"])
+
+    def test_one_child_job_owns_the_ingestion_notebook_and_checkpoint(self):
+        notebook_owners = [name for name, job in self.jobs.items()
+                           if "notebook_path: ../notebooks/ingest_ocpp_files.py" in job]
+        checkpoint_owners = [name for name, job in self.jobs.items() if "checkpoint_path:" in job]
+        self.assertEqual(notebook_owners, ["ingest_ocpp_files"])
+        self.assertEqual(checkpoint_owners, ["ingest_ocpp_files"])
+        self.assertEqual(self.resource.count("notebook_path: ../notebooks/ingest_ocpp_files.py"), 1)
+        self.assertEqual(self.resource.count("checkpoint_path:"), 1)
+        self.assertIn("      max_concurrent_runs: 1\n", self.jobs["ingest_ocpp_files"])
 
 
 if __name__ == "__main__":

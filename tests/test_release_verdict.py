@@ -210,8 +210,8 @@ class ReleaseVerdictTests(unittest.TestCase):
         self.assertEqual(row["blocked_assertions"], 6)
 
     def test_manifest_without_sessions_fails_instead_of_vacuous_pass(self):
-        self.add_manifest(run="empty-run")
-        row = self.verdict(run="empty-run")
+        self.add_manifest(run="amount-fixed-v1")
+        row = self.verdict(run="amount-fixed-v1")
         self.assert_failed(row, baseline="FAIL")
         self.assertEqual(row["required_assertions"], 0)
         self.assertEqual(row["passed_assertions"], 0)
@@ -225,8 +225,8 @@ class ReleaseVerdictTests(unittest.TestCase):
         self.assertIsNone(row["candidate_sha"])
 
     def test_orphan_assertion_run_is_not_omitted(self):
-        self.db.execute("INSERT INTO assertion_result SELECT 'orphan-run', release_role, session_id, assertion_id, expected_value, actual_value, difference, status, severity, message, evidence FROM assertion_result WHERE release_role = 'candidate' AND assertion_id = 'amount_match'")
-        row = self.verdict(run="orphan-run")
+        self.db.execute("INSERT INTO assertion_result SELECT 'mock-amount-bad-v1', release_role, session_id, assertion_id, expected_value, actual_value, difference, status, severity, message, evidence FROM assertion_result WHERE release_role = 'candidate' AND assertion_id = 'amount_match'")
+        row = self.verdict(run="mock-amount-bad-v1")
         self.assert_failed(row, baseline="FAIL")
         self.assertEqual(row["unexpected_assertions"], 1)
         self.assertEqual(row["required_assertions"], 0)
@@ -288,14 +288,14 @@ class ReleaseVerdictTests(unittest.TestCase):
         self.assertEqual(row["passed_assertions"], 0)
 
     def test_runs_are_isolated_and_each_has_one_verdict(self):
-        self.add_manifest(run="other-run")
-        self.fixture.add_oracle(run="other-run")
-        self.fixture.add_actual(run="other-run", role="baseline")
-        self.fixture.add_actual(run="other-run", role="candidate", amount=6.5)
+        self.add_manifest(run="amount-bad-v1")
+        self.fixture.add_oracle(run="amount-bad-v1")
+        self.fixture.add_actual(run="amount-bad-v1", role="baseline")
+        self.fixture.add_actual(run="amount-bad-v1", role="candidate", amount=6.5)
         self.refresh_assertions()
         self.assertEqual(len(self.rows()), 2)
         self.assertEqual(self.verdict()["verdict"], "PASS")
-        other = self.verdict(run="other-run")
+        other = self.verdict(run="amount-bad-v1")
         self.assert_failed(other)
         self.assertEqual(other["failed_assertions"], 1)
         self.assertEqual(other["required_assertions"], 14)
