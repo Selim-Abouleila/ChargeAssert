@@ -75,8 +75,9 @@ flowchart TB
         History --> Release["Release review<br/>Give teams evidence to approve or investigate a change"]
     end
 
-    subgraph Ingestion["Separate file ingestion demo"]
-        Files["Synthetic JSONL files in a managed Volume"] --> Loader["Auto Loader: process available files, then stop"]
+    subgraph Ingestion["Separate session generation and file ingestion"]
+        Generator["Manual generator: varied, repeatable charging sessions"] --> Files["Synthetic JSONL files in a managed Volume"]
+        Files --> Loader["Auto Loader: process available files, then stop"]
         Checkpoint["Persistent checkpoint: remember processed files"] --- Loader
         Loader --> Landing["Bronze landing: original lines and source details"]
     end
@@ -171,6 +172,7 @@ Check the landed records in Databricks SQL Editor:
 ```sql
 SELECT source_file_name, COUNT(*) AS landed_rows
 FROM workspace.chargeassert_dev_bronze.ocpp_events_landing
+WHERE source_file_name IN ('batch_001.jsonl', 'batch_002.jsonl')
 GROUP BY source_file_name
 ORDER BY source_file_name;
 ```
@@ -184,11 +186,24 @@ databricks bundle run -t dev ingest_ocpp_files
 databricks bundle run -t dev ingest_ocpp_files
 ```
 
-On a first demonstration with only the supplied files, total rows should follow **3 → 3 → 6 → 6**. The checkpoint remembers which files were processed. The same event delivered in a different file is not yet deduplicated.
+On the first demonstration, rows from these two sample files should follow **3 → 3 → 6 → 6**. The query excludes files created by the session generator. The checkpoint remembers which files were processed. The same event delivered in a different file is not yet deduplicated.
 
 Keep the published files and checkpoint unchanged. Repeating the whole demonstration after both files have landed leaves six rows. These jobs run on demand and stop when finished; no continuous service or schedule is configured.
 
 See the [ingestion runbook](docs/02-runbook.md#incremental-ocpp-file-ingestion) and [verification queries](sql/13_check_ocpp_ingestion.sql) for source metadata, hash and repeat-run checks.
+
+## Generate new charging sessions
+
+After deploying, create two sessions with different IDs, times and meter readings, then load their events into Bronze. Wait for the generator to succeed before starting ingestion:
+
+```bash
+databricks bundle run -t dev generate_sessions --params batch_id=sessions-001,session_count=2,seed=42
+databricks bundle run -t dev ingest_ocpp_files
+```
+
+The generator writes one file, then stops. The same batch ID, count and seed produce the same file; rerunning leaves it unchanged. Use a new batch ID for a new file. Each session has three events, so this batch should land **six rows for two sessions**. There is no automatic schedule yet.
+
+**These new sessions reach Bronze only.** Connecting them to the billing checks is the next step. They carry one EUR 0.45/kWh price setting, but no calculated or reported bills. See the [generator runbook](docs/02-runbook.md#generate-new-charging-sessions) for settings, SQL checks and safe reruns. Generation and ingestion must run one after the other; if publishing fails, investigate before ingesting.
 
 ## Local tests
 
@@ -198,7 +213,7 @@ From the repository root, run:
 python -B -m unittest discover -s tests -q
 ```
 
-The tests cover billing behavior, assertions, verdict rules, execution tracking and file ingestion boundaries. They use local substitutes for parts of Databricks and Spark; workspace runs are still needed to verify the deployed pipeline.
+The tests cover billing behavior, assertions, verdict rules, execution tracking, session generation and file ingestion boundaries. They use local substitutes for parts of Databricks and Spark; workspace runs are still needed to verify the deployed pipeline.
 
 ## Current status and next steps
 
@@ -206,11 +221,11 @@ This is an independent public portfolio project and a working MVP using small sy
 
 **Verified in Databricks:** the healthy billing checks, wrong-amount FAIL → corrected PASS examples, and a completed execution with seven saved scenario snapshots.
 
-**Implemented, with verification still to complete:** direct inspection of the missing-record financial snapshots, the ingestion demo's 3 → 3 → 6 → 6 sequence, and failure/recovery demonstrations that prove an older PASS cannot hide a failed attempt.
+**Implemented, with verification still to complete:** the new session generator and its repeated runs, direct inspection of the missing-record financial snapshots, the ingestion demo's 3 → 3 → 6 → 6 sequence, and failure/recovery demonstrations that prove an older PASS cannot hide a failed attempt.
 
 The next milestones are:
 
-1. **Finish the ingestion proof:** verify repeat runs and interrupted-run recovery in Databricks.
+1. **Finish the ingestion proof:** verify generated sessions, repeat runs and interrupted-run recovery in Databricks.
 2. **Connect incoming data to billing checks:** validate events, keep rejected records for investigation, handle duplicates and late arrivals, and replace the fixed session mappings.
 3. **Broaden the billing scenarios:** add duplicate records, wrong energy, wrong tariffs and retry failures.
 4. **Test real releases:** replace mocks with external release replay and add GitHub checks tied to the exact Databricks execution.
@@ -228,7 +243,7 @@ The [remaining-work reference](docs/02-runbook.md#remaining-mvp-work) tracks the
 | [databricks.yml](databricks.yml) | Bundle configuration and the development target. |
 | [resources/](resources/) | Schemas, managed Volume and job definitions. |
 | [sql/](sql/) | Table definitions, billing calculations, assertions and verification queries. |
-| [notebooks/](notebooks/) | Mock billing, execution tracking and file ingestion code. |
+| [notebooks/](notebooks/) | Session generation, mock billing, execution tracking and file ingestion code. |
 | [data/ingestion_demo/](data/ingestion_demo/) | The two synthetic input files for the ingestion demo. |
 | [tests/](tests/) | Local automated checks. |
 

@@ -6,7 +6,7 @@ ChargeAssert helps EV charging teams find billing errors before a software relea
 
 The intended release test gives the same repeatable charging scenario to a baseline version and a candidate version. It checks both against an independent calculation of what the charge should be. A deliberately faulty candidate must fail; its corrected version must pass with the same recorded inputs. The current code demonstrates this with fixed responses and Python billing mocks. It stores the PASS/FAIL decisions in Databricks; publishing a GitHub release check is still planned.
 
-[Current status](#current-implementation-status) · [File ingestion](#incremental-ocpp-file-ingestion) · [Local checks](#local-checks-and-their-limits) · [Deploy and run](#billing-regression-job-and-deployment) · [Remaining work](#remaining-mvp-work)
+[Current status](#current-implementation-status) · [Generate sessions](#generate-new-charging-sessions) · [File ingestion](#incremental-ocpp-file-ingestion) · [Local checks](#local-checks-and-their-limits) · [Deploy and run](#billing-regression-job-and-deployment) · [Remaining work](#remaining-mvp-work)
 
 ## Current implementation status
 
@@ -18,7 +18,7 @@ ChargeAssert uses managed Delta tables inside these Unity Catalog schemas:
 | Silver | `workspace.chargeassert_dev_silver` |
 | Gold | `workspace.chargeassert_dev_gold` |
 
-Thirteen tables have SQL or Python creation code in this repository. Twelve belong to the fifteen-task `create_tables` billing test job. That job loads fixed test data (called fixtures), runs a Python billing mock and records the results of each job attempt. The thirteenth table, `ocpp_events_landing`, receives files through a separate ingestion job. Two additional one-task jobs publish the demo files and load them with Auto Loader, making three jobs in total.
+Thirteen tables have SQL or Python creation code in this repository. Twelve belong to the fifteen-task `create_tables` billing test job. That job loads fixed test data (called fixtures), runs a Python billing mock and records the results of each job attempt. The thirteenth table, `ocpp_events_landing`, receives files through Auto Loader. Three separate one-task jobs generate new sessions, publish the original sample files and ingest available files, making four jobs in total.
 
 **Implemented means the code exists. It does not mean the latest version has been deployed or tested successfully in Databricks.**
 
@@ -29,13 +29,13 @@ The following results have been confirmed in Databricks:
 - On 2026-09-21, the Python-generated amount tests were confirmed. `mock-amount-bad-v1` has a passing baseline, a failing candidate and overall FAIL, with 13 passing / 1 failing checks. `mock-amount-fixed-v1` has PASS for both releases and overall, with 14 passing / 0 failing checks.
 - Execution `192226331898541:436138745571440:0`, started on 2026-09-23, was confirmed as `SUCCEEDED`, with seven saved result snapshots for seven distinct scenarios. Earlier failed attempts remain `FAILED` with no snapshots.
 
-The successful execution confirms that result capture works after the Spark filter fix. The exact financial values in those snapshots and the deliberate failure test before Gold still need checking. The new file-ingestion jobs still need deployment and testing in the workspace.
+The successful execution confirms that result capture works after the Spark filter fix. The exact financial values in those snapshots and the deliberate failure test before Gold still need checking. The session generator and file-ingestion jobs still need deployment and testing in the workspace.
 
 The job keeps three runs with fixed responses (`smoke-run-v1`, `amount-bad-v1`, `amount-fixed-v1`) and four runs whose responses are calculated by the mock (`mock-amount-bad-v1`, `mock-amount-fixed-v1`, `mock-missing-cdr-bad-v1`, `mock-missing-cdr-fixed-v1`). Each uses one session (`txn-smoke-v1`), the same three OCPP-shaped charging events and one EUR energy tariff. A CDR, or charge detail record, is the billing record returned for a session.
 
 The Python mock calculates the reported charge from the raw meter events and tariff. Silver SQL calculates the expected charge separately; this independent calculation is called the **oracle**. The bad amount candidates report EUR 6.50; healthy responses report EUR 5.63. The bad missing-CDR candidate returns no billing record. Every other run has one baseline and one candidate CDR. These are small synthetic tests; the complete release gate and six-scenario suite are still planned.
 
-The generator runs once when the job is started and then exits. There is no schedule, continuous loop, HTTP server or background service.
+The billing mock runs once when its job is started and then exits. The separate session generator does the same: it creates one file containing a batch of events on request. There is no schedule, continuous loop, HTTP server or background service.
 
 A scenario's `run_id` identifies its saved test inputs and outputs. An `execution_id` identifies one Databricks job attempt that checks them. Every full job run gets its own audit record and result snapshots. Always query the exact execution you want to check. An old PASS in `release_verdict` cannot show that a newer failed or unfinished execution passed.
 
@@ -164,7 +164,7 @@ This separate path loads newly arrived files into Delta and remembers which file
 ```text
 data/ingestion_demo/batch_001.jsonl or batch_002.jsonl
   → publish_ingestion_demo
-  → managed Volume /incoming/
+  → managed Volume /incoming/ ← generate_sessions (new synthetic sessions)
   → ingest_ocpp_files (Auto Loader, AvailableNow)
   → Bronze ocpp_events_landing
 ```
@@ -176,6 +176,7 @@ The bundle defines the managed Unity Catalog Volume `workspace.chargeassert_dev_
   incoming/
     batch_001.jsonl
     batch_002.jsonl
+    generated-sessions-001.jsonl
   checkpoints/
     ocpp_v1/
 ```
@@ -183,6 +184,8 @@ The bundle defines the managed Unity Catalog Volume `workspace.chargeassert_dev_
 Only the incoming directory is read. The separate checkpoint directory stores the stream's progress so later runs know which files have already been processed. The managed Volume needs no separate cloud storage credentials for this demo. Receiving external GCS files is future work. See [Unity Catalog Volumes](https://docs.databricks.com/aws/en/volumes) and [Auto Loader production guidance](https://docs.databricks.com/aws/en/ingestion/cloud-object-storage/auto-loader/production).
 
 `publish_ingestion_demo` accepts the job parameter `batch`, which defaults to `batch_001`; the only other supported value is `batch_002`. Each committed test file has three event envelopes, one per line, for a synthetic charging session. An envelope contains `schema_version`, `run_id`, `event_id`, `charging_station_id` and a `payload` holding the original event JSON as a string. The second file uses a different session and identifiers.
+
+The [session generator](#generate-new-charging-sessions) writes new files into the same incoming directory. It uses the same envelope format and adds its settings and a fixed tariff as metadata. Auto Loader keeps that metadata as part of the original text line; it does not yet turn generated sessions into billing results.
 
 The publisher accepts only these two files, with a 64 KiB size limit. It keeps their payload text unchanged and uses LF line endings. It checks the contents and size before and after publishing. Publishing an identical existing file changes nothing; conflicting contents are rejected. It never overwrites a published file, and storage or permission errors fail the task.
 
@@ -227,6 +230,7 @@ Deployment creates the Volume and the job definitions. The publisher creates the
 ```sql
 SELECT source_file_name, COUNT(*) AS landed_rows
 FROM workspace.chargeassert_dev_bronze.ocpp_events_landing
+WHERE source_file_name IN ('batch_001.jsonl', 'batch_002.jsonl')
 GROUP BY source_file_name
 ORDER BY source_file_name;
 ```
@@ -250,18 +254,80 @@ Expect `batch_001.jsonl / 3` and `batch_002.jsonl / 3`, six rows in total. Repea
 databricks bundle run -t dev ingest_ocpp_files
 ```
 
-| Step | Newly ingested rows | Total rows | Source files |
+| Step | New sample rows | Total sample rows | Sample files |
 | --- | ---: | ---: | ---: |
 | Publish batch 1, ingest | 3 | 3 | 1 |
 | Ingest again | 0 | 3 | 1 |
 | Publish batch 2, ingest | 3 | 6 | 2 |
 | Ingest again | 0 | 6 | 2 |
 
-These counts assume this is the first demo, with no previously loaded data and only the two supplied files. If both files already exist, the first ingestion processes both. If both are already loaded, repeating the sequence leaves six rows. Do not delete or overwrite source files, checkpoint state or the destination table to make the demo look new. The checkpoint belongs to this source and destination; a safe reset or replay procedure still needs to be designed.
+These counts describe only `batch_001.jsonl` and `batch_002.jsonl`; the query filters out generated batches. They assume this is the first time the two sample files are published and loaded. If both files already exist, the first ingestion processes both. If both are already loaded, repeating the sequence leaves six sample rows. Do not delete or overwrite source files, checkpoint state or the destination table to make the demo look new. The checkpoint belongs to this source and destination; a safe reset or replay procedure still needs to be designed.
 
 Run [the read-only verification SQL](../sql/13_check_ocpp_ingestion.sql) after each successful ingestion. It checks total and per-file row counts, source metadata, raw-record hashes and repeated `(source_file_path, record_hash)` pairs. It also displays the original envelopes. For these test files, there must be zero invalid hashes, missing metadata values or repeated pairs. If no new file arrives, row counts and existing ingestion timestamps must stay unchanged. The default catalog is `workspace`; change the catalog in the SQL table names if deploying with another `catalog_name`.
 
 These jobs need serverless notebook/job compute, Unity Catalog access and read/write access to the Volume. Check their outcomes in their own Databricks job runs. They do not write to the billing test job's `job_execution` or `execution_verdict` tables. The fifteen-task `create_tables` job can still run independently. Local checks cannot prove how checkpoints or serverless compute behave in the workspace. Deployment, the four-step demo and recovery after interrupted ingestion still need testing in Databricks.
+
+### Generate new charging sessions
+
+`generate_sessions` creates a batch of synthetic sessions, saves one JSONL file in the existing incoming directory, then stops. Each session has its own ID and three OCPP-shaped events: `Started`, `Updated` and `Ended`. Start times, duration and positive energy usage vary. All sessions carry the same EUR 0.45/kWh tariff setting.
+
+The seed makes the variation repeatable. The same batch ID, count and seed produce the same file. This is test data, not real charging activity. The generator does not calculate a bill, create a CDR or write to the twelve billing tables. Connecting these new sessions to Silver and Gold is the next step.
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `batch_id` | `sessions-001` | Identifies one saved batch. Use 1–32 lowercase letters, digits, hyphens or underscores, starting with a letter. Use a new ID for a new batch or changed settings. |
+| `session_count` | `2` | Number of sessions, from 1 to 1,000. Each produces three event lines. |
+| `seed` | `42` | Repeatable random seed, from 0 to 4,294,967,295. |
+
+For `batch_id=sessions-001`, the file is `generated-sessions-001.jsonl` and every envelope has `run_id=generated-v1-sessions-001`. The envelope also records the generator version, batch ID, seed, session count and tariff metadata. A generated `run_id` identifies its input batch; it is not an execution of the separate billing checks.
+
+#### Deploy, generate and check two sessions
+
+Run each command only after the previous one succeeds:
+
+```bash
+git switch dev
+git pull --ff-only origin dev
+databricks bundle validate -t dev
+databricks bundle deploy -t dev
+databricks bundle run -t dev generate_sessions --params batch_id=sessions-001,session_count=2,seed=42
+databricks bundle run -t dev ingest_ocpp_files
+```
+
+In Databricks SQL Editor, check this batch only:
+
+```sql
+SELECT
+  COUNT(*) AS event_rows,
+  COUNT(DISTINCT get_json_object(
+    get_json_object(raw_record, '$.payload'),
+    '$.transactionInfo.transactionId'
+  )) AS sessions
+FROM workspace.chargeassert_dev_bronze.ocpp_events_landing
+WHERE get_json_object(raw_record, '$.run_id') = 'generated-v1-sessions-001';
+```
+
+The [generated-session checks](../sql/14_check_generated_sessions.sql) also show event details and verify hashes. Set their `batch_id` SQL parameter to `sessions-001`.
+
+Expect **6 event rows and 2 sessions**. Repeat the same generator command and ingestion command, then run the SQL again. It should still return **6 and 2**. The publisher leaves an identical file unchanged; the ingestion checkpoint remembers that the file was already processed.
+
+For two more sessions, use a new batch ID:
+
+```bash
+databricks bundle run -t dev generate_sessions --params batch_id=sessions-002,session_count=2,seed=42
+databricks bundle run -t dev ingest_ocpp_files
+```
+
+Change the SQL filter to `generated-v1-sessions-002`: expect another **6 rows and 2 sessions**. The first batch stays unchanged. To try 100 sessions later, use a fresh ID such as `sessions-100-001` with `session_count=100`; expect 300 event rows for that batch. The 1,000-session limit keeps this first version small. No throughput or cost benchmark has been measured yet.
+
+#### Safe reruns and current limits
+
+- Reusing a batch ID with changed settings is rejected. Use a new ID; do not overwrite the old file or reset the checkpoint.
+- Run publishing and ingestion **one after the other**. `dbutils.fs.put` is not an atomic handoff to Auto Loader, so ingestion must not read while either publisher is writing. Each job allows one run at a time, but that does not prevent overlap between different jobs or manual writers.
+- If generation fails, **do not start ingestion**. Rerun the same batch with the same settings. If it reports a partial or conflicting file, stop and investigate; the generator will not overwrite it. A safe cleanup and recovery procedure is still future work.
+- The job has no schedule or continuous loop. It does not need a pause button: it stops after one batch. Scheduled generation and pause/resume controls can be added later.
+- Auto Loader reads all available incoming files, not just the batch in the command you ran. Filter checks by the generated `run_id` so older sample files do not change the expected counts.
+- Local tests check generated data and publishing behavior with substitutes for storage. Deployment, the **6 → 6** repeat check and recovery still need verification in Databricks. These jobs do not write billing execution receipts or Gold verdicts.
 
 ## Silver — produce trusted business records
 
@@ -340,6 +406,7 @@ The tests cover several parts of the billing path:
 - **Paired fixtures and Python mocks.** Tests follow the seeded responses through the independent charge calculation and Gold decisions. They check that inputs stay unchanged, reject missing or ambiguous inputs to the expected calculation, and simulate insert-only keys when testing repeat loading. Python mock tests separately check the executable calculation and generated outputs without Databricks.
 - **Verdict coverage.** Tests cover an entire missing release or session, duplicate checks taking the place of missing checks, unsupported rules/roles/statuses, empty runs, and missing or duplicate manifests.
 - **File ingestion and publishing.** Twenty tests check that raw source lines are kept exactly, including malformed JSON, whitespace and Unicode; hashes and metadata are selected correctly; and repeated business events in different files are kept. They also check the fixed checkpoint, append mode, AvailableNow calls, rejected configurations and reported failures. Publisher tests cover stable file bytes, harmless repeats, refused overwrites, truncated files, competing creates, storage errors and notebook/bundle wiring. These use fakes and mocks; they do not prove real Auto Loader checkpointing or recovery.
+- **Session generation.** Tests check repeatable batches, distinct session and event IDs, valid event order and meter readings, parameter limits, and safe publishing. These are local checks; the generated files still need to be loaded and inspected in Databricks.
 
 These checks do **not** run a Databricks notebook, `from_json`, Spark type analysis/decimal arithmetic, Delta DDL or a real `MERGE`. Running the job in the workspace is still required.
 
@@ -436,7 +503,7 @@ The verdict gives reviewers a decision and counts they can trace back to the che
 
 ## Billing regression job and deployment
 
-Run the billing checks with the bundle job `create_tables`. In the workspace, its name is `chargeassert_dev_create_tables`. It has fifteen tasks, shown below. The two [file-ingestion jobs](#incremental-ocpp-file-ingestion) run separately.
+Run the billing checks with the bundle job `create_tables`. In the workspace, its name is `chargeassert_dev_create_tables`. It has fifteen tasks, shown below. The [session generator](#generate-new-charging-sessions) and two [file-ingestion jobs](#incremental-ocpp-file-ingestion) run separately.
 
 ```text
 begin_execution → create_run_manifest
@@ -860,7 +927,7 @@ The items below separate what already works from what still needs to be built or
 
 | Workstream | Still missing |
 | --- | --- |
-| Repeatable inputs | Add a versioned list of scenarios, an event generator that uses the seed, real baseline/candidate Git commit IDs and hashes covering every input snapshot. Current inputs and times are fixed. Saved-response runs use synthetic SHA labels; mock runs hash the module source and behavior. New paired manifests hash tariff contents, while the original smoke manifest hashes only a tariff identifier. |
+| Repeatable inputs | The separate manual session generator now uses a seed to create varied, repeatable event files. Verify it in Databricks and connect those events to billing checks. Add a versioned scenario list, real baseline/candidate Git commit IDs and hashes covering every input snapshot. The billing job still uses fixed inputs and times. Saved-response runs use synthetic SHA labels; mock runs hash the module source and behavior. New paired manifests hash tariff contents, while the original smoke manifest hashes only a tariff identifier. |
 | Public data and file ingestion | Verify the separate Auto Loader landing path in Databricks. Add external GCS files, versioned ACN-Data charging behavior and French IRVE station data, and document how those sources are combined into synthetic inputs. Keep invalid records separately for investigation, handle schema changes and duplicate events, prove recovery and backfills, and connect landed data to session processing. This combined data must not be described as real French transactions or actual operator tariffs. |
 | Replay and deliberate faults | Wrong-amount and missing-CDR mock pairs already use identical inputs; the missing-CDR results still need direct workspace verification. Add duplicate charges and the other required cases, then replay inputs against external releases over HTTP. Record events and retry attempts so the first difference can be found. Current mocks do not run real software release builds. |
 | Session validation | Select the correct meter measurement, convert units and multipliers, handle meter resets, and check timestamps and sequence numbers. Remove repeated event deliveries, define what happens to late, missing or conflicting events, and include station identity in session keys. |
@@ -871,7 +938,7 @@ The items below separate what already works from what still needs to be built or
 | Verdicts and evidence | A successful execution with seven snapshots is confirmed. Inspect the exact financial snapshots and run the A/B/C failure test. Registration, saved verdict/check snapshots and blocking of failed executions work for the seven fixed scenarios. Still needed: a general list of expected sessions, binding results to exact source/Silver versions, protection from unrelated writers, traces of the first difference, and separate summaries for customer overcharges and potentially unbilled revenue. Mock hashes identify code and behavior, not executed release builds. |
 | Estimated financial impact | Calculate the change in defect rate × assumed monthly sessions × assumed impact per affected session. Show every assumption and separate customer overcharges from potentially unbilled revenue. Label these numbers as estimates, never actual losses or proven savings. |
 | GitHub automation | Add GitHub Actions that authenticate to Databricks, run the checks, retrieve the exact execution/scenario result and publish PASS/FAIL with evidence links. Configure that check as required for release approval. Require a successful Databricks job, a successful execution record and a passing snapshot; never use an older success instead. |
-| Verification and demo | Saved-response and computed wrong-amount FAIL → corrected PASS cases are verified in Databricks, along with one successful seven-snapshot execution. Still needed: direct missing-CDR result checks, the A/B/C failure test, interrupted and partial-run checks, the ingestion 3 → 3 → 6 → 6 sequence and recovery after interrupted ingestion. Also verify stable reruns, full Databricks integration, broader scenarios and repeatable complete runs. The PDF's 50,000 sessions and EUR 24,380 report are examples, not measured results. |
+| Verification and demo | Saved-response and computed wrong-amount FAIL → corrected PASS cases are verified in Databricks, along with one successful seven-snapshot execution. Still needed: generated-session 6 → 6 repeat checks, direct missing-CDR result checks, the A/B/C failure test, interrupted and partial-run checks, the sample-file 3 → 3 → 6 → 6 sequence and recovery after interrupted ingestion. Also verify stable reruns, full Databricks integration, broader scenarios and repeatable complete runs. The PDF's 50,000 sessions and EUR 24,380 report are examples, not measured results. |
 | Runtime access | Add explicit permissions when introducing a separate CI or runtime identity. Current development relies on schema ownership. |
 
 ### Six flagship scenarios
@@ -887,10 +954,10 @@ The items below separate what already works from what still needs to be built or
 
 ## Next implementation step
 
-1. **Verify file ingestion in Databricks.** Run the 3 → 3 → 6 → 6 sequence above. Keep the source files, landing rows and checkpoint, and check their metadata and hashes. Then test recovery after an interrupted run and add a separate place to retain invalid records. Measure what the deployed job does; local mocks cannot prove recovery behavior.
+1. **Verify generated sessions and ingestion in Databricks.** Generate two sessions, ingest them and check for six rows. Repeat both jobs and confirm that the count stays six, then try a new batch. Also run the original sample files' 3 → 3 → 6 → 6 check. Keep the files, landing rows and checkpoint, and inspect their metadata and hashes. Plan recovery after an interrupted run and a separate place to retain invalid records; local mocks cannot prove recovery behavior.
 2. **Connect incoming data to the billing pipeline.** Replace the fixed scenario/session list and validate landed event envelopes before sending them through Bronze and Silver. Define duplicate and late-event handling, schema versions and safe backfills. Then use larger synthetic inputs to measure runtime and cost.
 3. **Finish the billing evidence checks.** Inspect the confirmed execution's snapshots: the bad missing-CDR run should have 8 PASS / 1 FAIL / 5 BLOCKED checks, and the corrected run should have 14 PASS checks. Run the A/B/C test: failed B must return `BLOCKED` while A's PASS remains stored; a new full C must succeed without changing earlier snapshots.
-4. **Expand the release tests.** Add duplicate charges, wrong energy, wrong tariffs, retry failures and late events. Once data processing and saved evidence are reliable, add seeded event generation, external HTTP replay, documented public-data sources, estimated financial impact and the GitHub release check.
+4. **Expand the release tests.** Add duplicate charges, wrong energy, wrong tariffs, retry failures and late events. Once generated sessions reach the billing checks and their evidence is reliable, add external HTTP replay, documented public-data sources, estimated financial impact and the GitHub release check.
 
 The MVP does not include real card payments; bank, payment-provider (PSP), ERP or settlement connections; full OCPP/OCPI certification; production monitoring and recovery; support for every tariff, tax and currency; machine learning; or confidential operator data.
 

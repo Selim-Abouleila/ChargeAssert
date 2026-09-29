@@ -21,7 +21,7 @@ These tables let a team trace a result back to its inputs and the job that produ
 | `job_execution` | Records each Databricks job attempt, whether it finished, and why it failed if it did. |
 | `ocpp_events_landing` | Receives original file lines through Auto Loader, with filenames, timestamps and hashes. |
 
-The Auto Loader demo remembers processed files between runs. It does not yet feed the billing pipeline or remove duplicate events arriving in different files.
+The manual session generator creates varied charging events as files. Auto Loader loads them into `ocpp_events_landing` and remembers processed files between runs. This path does not yet feed the billing checks or remove duplicate events arriving in different files. The generator stops after each batch; no automatic schedule is configured.
 
 ## Silver: work out what should have been billed
 
@@ -63,10 +63,10 @@ Seven fixed scenarios cover healthy bills, wrong amounts, missing billing record
 
 This is a working MVP with synthetic data and mock billing responses. The amount examples and an execution containing seven saved scenario snapshots have been verified in Databricks.
 
-Next: verify the file-ingestion and recovery demos, inspect the missing-record results, and connect validated incoming events to the billing checks. Testing real software releases and publishing automated GitHub release checks are still planned.
+Next: verify generated sessions and repeat ingestion in Databricks, test recovery, inspect the missing-record results, and connect incoming events to the billing checks. Testing real software releases and publishing automated GitHub release checks are still planned.
 
 ## Details and commands
 
 - [Original MVP brief](OVERVIEW.pdf) — the business problem and target scope.
 - [Full runbook](02-runbook.md) — table rules, field definitions, limitations and remaining work.
-- [Deploy and run](02-runbook.md#billing-regression-job-and-deployment) · [Check an execution](02-runbook.md#check-the-requested-execution) · [File-ingestion demo](02-runbook.md#incremental-ocpp-file-ingestion).
+- [Deploy and run](02-runbook.md#billing-regression-job-and-deployment) · [Check an execution](02-runbook.md#check-the-requested-execution) · [Generate sessions](02-runbook.md#generate-new-charging-sessions) · [File-ingestion demo](02-runbook.md#incremental-ocpp-file-ingestion).

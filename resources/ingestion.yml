@@ -10,6 +10,27 @@ resources:
         prevent_destroy: true
 
   jobs:
+    generate_sessions:
+      name: chargeassert_dev_generate_sessions
+      description: Generate one repeatable synthetic charging-session file; publish once and stop.
+      max_concurrent_runs: 1
+      parameters:
+        - name: batch_id
+          default: sessions-001
+        - name: session_count
+          default: "2"
+        - name: seed
+          default: "42"
+      tasks:
+        - task_key: generate_batch
+          notebook_task:
+            notebook_path: ../notebooks/generate_sessions.py
+            base_parameters:
+              input_path: /Volumes/${var.catalog_name}/${resources.schemas.bronze.name}/${resources.volumes.ocpp_ingestion.name}/incoming
+              batch_id: "{{job.parameters.batch_id}}"
+              session_count: "{{job.parameters.session_count}}"
+              seed: "{{job.parameters.seed}}"
+
     publish_ingestion_demo:
       name: chargeassert_dev_publish_ingestion_demo
       description: Publish one immutable synthetic OCPP JSON-lines batch; identical publication is a no-op.

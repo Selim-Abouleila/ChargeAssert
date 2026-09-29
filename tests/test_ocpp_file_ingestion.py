@@ -176,7 +176,7 @@ class IngestionBundleTests(unittest.TestCase):
         resource = (ROOT / "resources/ingestion.yml").read_text(encoding="utf-8")
         self.assertIn("      volume_type: MANAGED", resource)
         self.assertIn("        prevent_destroy: true", resource)
-        self.assertEqual(resource.count("      max_concurrent_runs: 1"), 2)
+        self.assertEqual(resource.count("      max_concurrent_runs: 1"), 3)
         self.assertNotRegex(resource, r"(?m)^      (?:schedule|trigger|continuous):")
         self.assertNotRegex(resource, r"(?m)^          (?:new_cluster|existing_cluster_id|job_cluster_key):")
         references = {
