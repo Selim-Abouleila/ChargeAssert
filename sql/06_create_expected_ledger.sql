@@ -37,6 +37,10 @@ WITH scenario_sessions AS (
   UNION ALL SELECT 'mock-amount-fixed-v1', 'txn-smoke-v1', 'tariff-smoke-v1'
   UNION ALL SELECT 'mock-missing-cdr-bad-v1', 'txn-smoke-v1', 'tariff-smoke-v1'
   UNION ALL SELECT 'mock-missing-cdr-fixed-v1', 'txn-smoke-v1', 'tariff-smoke-v1'
+  UNION ALL
+  SELECT run_id, session_id, 'generated-energy-v1' AS tariff_id
+  FROM IDENTIFIER(:session_lifecycle_table_name)
+  WHERE run_id LIKE 'generated-v1-%'
 ), checked_sessions AS (
   SELECT m.run_id, m.session_id, COUNT(s.run_id) AS session_rows,
     count_if(
@@ -66,6 +70,10 @@ WITH scenario_sessions AS (
   UNION ALL SELECT 'mock-amount-fixed-v1', 'txn-smoke-v1', 'tariff-smoke-v1'
   UNION ALL SELECT 'mock-missing-cdr-bad-v1', 'txn-smoke-v1', 'tariff-smoke-v1'
   UNION ALL SELECT 'mock-missing-cdr-fixed-v1', 'txn-smoke-v1', 'tariff-smoke-v1'
+  UNION ALL
+  SELECT run_id, session_id, 'generated-energy-v1' AS tariff_id
+  FROM IDENTIFIER(:session_lifecycle_table_name)
+  WHERE run_id LIKE 'generated-v1-%'
 ), checked_tariffs AS (
   SELECT m.run_id, m.session_id, COUNT(t.run_id) AS tariff_rows,
     count_if(
@@ -105,6 +113,10 @@ USING (
     UNION ALL SELECT 'mock-amount-fixed-v1', 'txn-smoke-v1', 'tariff-smoke-v1'
     UNION ALL SELECT 'mock-missing-cdr-bad-v1', 'txn-smoke-v1', 'tariff-smoke-v1'
     UNION ALL SELECT 'mock-missing-cdr-fixed-v1', 'txn-smoke-v1', 'tariff-smoke-v1'
+    UNION ALL
+    SELECT run_id, session_id, 'generated-energy-v1' AS tariff_id
+    FROM IDENTIFIER(:session_lifecycle_table_name)
+    WHERE run_id LIKE 'generated-v1-%'
   ), session_price AS (
     SELECT
       s.run_id,

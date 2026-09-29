@@ -54,6 +54,14 @@ USING (
       CAST('2026-08-22T11:00:02Z' AS TIMESTAMP) AS ingest_time,
       '{"country_code":"FR","party_id":"CAS","id":"cdr-smoke-v1","session_id":"txn-smoke-v1","start_date_time":"2026-08-22T10:00:00Z","end_date_time":"2026-08-22T11:00:00Z","currency":"EUR","tariffs":[{"id":"tariff-smoke-v1","currency":"EUR","elements":[{"price_components":[{"type":"ENERGY","price":0.4500,"step_size":1}]}]}],"charging_periods":[{"start_date_time":"2026-08-22T10:00:00Z","dimensions":[{"type":"ENERGY","volume":12.5},{"type":"TIME","volume":1.0}],"tariff_id":"tariff-smoke-v1"}],"total_cost":{"excl_vat":5.63},"total_energy":12.5,"total_time":1.0,"credit":false,"last_updated":"2026-08-22T11:00:01Z"}' AS payload
     FROM VALUES ('baseline'), ('candidate') AS roles(release_role)
+    UNION ALL
+    SELECT
+      get_json_object(raw_record, '$.run_id') AS run_id,
+      get_json_object(raw_record, '$.release_role') AS release_role,
+      ingested_at AS ingest_time,
+      get_json_object(raw_record, '$.payload') AS payload
+    FROM IDENTIFIER(:landing_table_name)
+    WHERE get_json_object(raw_record, '$.cdr_id') IS NOT NULL
   )
   SELECT
     run_id,

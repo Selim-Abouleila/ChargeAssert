@@ -33,6 +33,18 @@ USING (
     sha1('candidate-smoke') AS candidate_sha,
     sha2('tariff-smoke-v1', 256) AS tariff_hash,
     CAST('2026-08-22T00:00:00Z' AS TIMESTAMP) AS created_at
+  UNION ALL
+  SELECT
+    get_json_object(raw_record, '$.run_id') AS run_id,
+    concat('generated-scenario-v1-', get_json_object(raw_record, '$.generator.batch_id')) AS scenario_id,
+    CAST(get_json_object(raw_record, '$.generator.seed') AS BIGINT) AS seed,
+    sha1('baseline-mock') AS baseline_sha,
+    sha1('candidate-mock') AS candidate_sha,
+    sha2('generated-energy-v1', 256) AS tariff_hash,
+    MAX(ingested_at) AS created_at
+  FROM IDENTIFIER(:landing_table_name)
+  WHERE get_json_object(raw_record, '$.run_id') LIKE 'generated-v1-%'
+  GROUP BY get_json_object(raw_record, '$.run_id'), get_json_object(raw_record, '$.generator.batch_id'), get_json_object(raw_record, '$.generator.seed')
 ) AS source
 ON target.run_id = source.run_id
 WHEN NOT MATCHED THEN INSERT (

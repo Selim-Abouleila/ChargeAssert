@@ -31,6 +31,7 @@ resources:
               path: ../sql/01_create_run_manifest.sql
             parameters:
               table_name: ${var.catalog_name}.chargeassert_dev_bronze.run_manifest
+              landing_table_name: ${var.catalog_name}.${resources.schemas.bronze.name}.ocpp_events_landing
 
         - task_key: create_ocpp_transaction_events_raw
           depends_on:
@@ -66,6 +67,7 @@ resources:
               path: ../sql/04_create_tariffs_raw.sql
             parameters:
               table_name: ${var.catalog_name}.chargeassert_dev_bronze.tariffs_raw
+              landing_table_name: ${var.catalog_name}.${resources.schemas.bronze.name}.ocpp_events_landing
 
         - task_key: create_tariff_history
           depends_on:
@@ -103,6 +105,7 @@ resources:
             parameters:
               table_name: ${var.catalog_name}.chargeassert_dev_bronze.ocpi_cdrs_raw
               run_manifest_table_name: ${var.catalog_name}.chargeassert_dev_bronze.run_manifest
+              landing_table_name: ${var.catalog_name}.${resources.schemas.bronze.name}.ocpp_events_landing
 
         - task_key: seed_amount_scenarios
           depends_on:

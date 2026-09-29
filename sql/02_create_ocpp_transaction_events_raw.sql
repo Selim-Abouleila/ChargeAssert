@@ -112,6 +112,7 @@ USING (
       ingested_at AS ingest_time,
       get_json_object(raw_record, '$.payload') AS payload
     FROM IDENTIFIER(:landing_table_name)
+    WHERE get_json_object(raw_record, '$.event_id') IS NOT NULL
   )
 ) AS source
 ON target.run_id = source.run_id
