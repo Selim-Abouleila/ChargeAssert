@@ -29,7 +29,7 @@ The following results have been confirmed in Databricks:
 - On 2026-09-21, the Python-generated amount tests were confirmed. `mock-amount-bad-v1` has a passing baseline, a failing candidate and overall FAIL, with 13 passing / 1 failing checks. `mock-amount-fixed-v1` has PASS for both releases and overall, with 14 passing / 0 failing checks.
 - Execution `192226331898541:436138745571440:0`, started on 2026-09-23, was confirmed as `SUCCEEDED`, with seven saved result snapshots for seven distinct scenarios. Earlier failed attempts remain `FAILED` with no snapshots.
 
-The successful execution confirms that the original result capture works after the Spark filter fix. The exact financial values in those snapshots and the deliberate failure test before Gold still need checking. On 2026-10-04, a [generated Gold result](#confirmed-generated-gold-result) was also confirmed: two sessions, 28 checks and all three verdicts PASS. Its job completion record, deliberate-error test, repeat runs and recovery still need checking.
+The successful execution confirms that the original result capture works after the Spark filter fix. The exact financial values in those snapshots and the deliberate failure test before Gold still need checking. On 2026-10-04, a [generated Gold result](03-generated-sessions.md#confirmed-result) was also confirmed: two sessions, 28 checks and all three verdicts PASS. Its job completion record, deliberate-error test, repeat runs and recovery still need checking.
 
 The job keeps three runs with fixed responses (`smoke-run-v1`, `amount-bad-v1`, `amount-fixed-v1`) and four runs whose responses are calculated by the mock (`mock-amount-bad-v1`, `mock-amount-fixed-v1`, `mock-missing-cdr-bad-v1`, `mock-missing-cdr-fixed-v1`). Each uses one session (`txn-smoke-v1`), the same three OCPP-shaped charging events and one EUR energy tariff. A CDR, or charge detail record, is the billing record returned for a session.
 
@@ -336,23 +336,7 @@ The `evaluate_generated_batch` job completes the path from landed events to bill
 
 Its two job parameters are `batch_id` (default `sessions-repaired-001`) and `candidate_mode` (`healthy` by default, or `amount_error`). It allows one run at a time and stops when the batch is finished. It does not schedule more work or modify the source files, landing rows or Auto Loader checkpoint.
 
-#### Confirmed generated Gold result
-
-On 2026-10-04, a user-provided SQL result showed execution `1101351879096886:604035863697496:0` with **2 sessions, 28 checks, and PASS for baseline, candidate and overall**.
-
-This confirms the saved healthy Gold result. The matching job completion record, deliberate-error test and repeat-run checks have not yet been confirmed.
-
-To see saved results without joining layers:
-
-```sql
-SELECT execution_id, session_count, assertion_count,
-       baseline_verdict, candidate_verdict, verdict
-FROM workspace.chargeassert_dev_gold.generated_execution_verdict
-ORDER BY captured_at DESC
-LIMIT 10;
-```
-
-Match `execution_id` to the one printed by your command. This query shows saved billing results; use [the exact-execution check](../sql/15_check_generated_billing.sql) to also confirm the job completed successfully.
+For the short test guide, simple Gold query and recorded result, see [Generated sessions](03-generated-sessions.md).
 
 #### Fresh batch, healthy result, deliberate error
 

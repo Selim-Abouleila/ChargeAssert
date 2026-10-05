@@ -58,11 +58,11 @@ Both modes use the same charging inputs. They keep separate results. Repeating t
 
 ## Current status and commands
 
-The original amount examples and a completed execution with seven snapshots have been verified in Databricks. A [generated Gold result](02-runbook.md#confirmed-generated-gold-result) now confirms two sessions, 28 checks and PASS for both billing versions and overall. Its job completion record, deliberate-error test, repeat runs and failure recovery still need checking. Real release replay and automated GitHub checks remain planned.
+The original amount examples and a completed execution with seven snapshots have been verified in Databricks. A [generated Gold result](03-generated-sessions.md#confirmed-result) now confirms two sessions, 28 checks and PASS for both billing versions and overall. Its job completion record, deliberate-error test, repeat runs and failure recovery still need checking. Real release replay and automated GitHub checks remain planned.
 
 There are six manual jobs: `create_tables`, `publish_ingestion_demo`, `generate_sessions`, `ingest_ocpp_files`, `combined_ingestion` and `evaluate_generated_batch`. Each stops when its work finishes.
 
 - [Original MVP brief](OVERVIEW.pdf) — the business problem and target scope.
 - [Full runbook](02-runbook.md) — table rules, field definitions, limitations and remaining work.
 - [Deploy the fixed demo](02-runbook.md#billing-regression-job-and-deployment) · [Check its execution](02-runbook.md#check-the-requested-execution).
-- [Generate and evaluate a new batch](02-runbook.md#evaluate-generated-batches-through-gold) · [File-ingestion demo](02-runbook.md#incremental-ocpp-file-ingestion).
+- [Generate sessions and check Gold](03-generated-sessions.md) · [File-ingestion demo](02-runbook.md#incremental-ocpp-file-ingestion).
