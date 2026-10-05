@@ -58,7 +58,7 @@ Both modes use the same charging inputs. They keep separate results. Repeating t
 
 ## Current status and commands
 
-The original amount examples and a completed execution with seven snapshots have been verified in Databricks. The repaired generated-to-Gold path is implemented and has local checks; its deployment, repeat runs and failure recovery still need workspace verification. Real release replay and automated GitHub checks remain planned.
+The original amount examples and a completed execution with seven snapshots have been verified in Databricks. A [generated Gold result](02-runbook.md#confirmed-generated-gold-result) now confirms two sessions, 28 checks and PASS for both billing versions and overall. Its job completion record, deliberate-error test, repeat runs and failure recovery still need checking. Real release replay and automated GitHub checks remain planned.
 
 There are six manual jobs: `create_tables`, `publish_ingestion_demo`, `generate_sessions`, `ingest_ocpp_files`, `combined_ingestion` and `evaluate_generated_batch`. Each stops when its work finishes.
 

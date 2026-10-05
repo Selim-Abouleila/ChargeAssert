@@ -81,7 +81,7 @@ flowchart TB
     class Customers,Revenue,Release business
 ```
 
-**Generated sessions now have a path through Gold:** run `evaluate_generated_batch` after ingestion. It validates one complete batch and writes its own `generated_*` tables. The original `create_tables` job still checks only its seven fixed scenarios. This connection is implemented; its Databricks verification is still pending.
+**Generated sessions now have a path through Gold:** run `evaluate_generated_batch` after ingestion. It validates one complete batch and writes its own `generated_*` tables. The original `create_tables` job still checks only its seven fixed scenarios. A healthy two-session Gold result has been confirmed in Databricks. Deliberate-error and repeat-run checks are still pending.
 
 **Gold provides the business evidence:** billing teams can see how much a reported charge differs from the expected amount, operations teams can find completed sessions with missing billing records, and release owners can review a PASS or FAIL with its supporting evidence. These outputs support human release reviews today; automated GitHub release checks are planned.
 
@@ -230,13 +230,13 @@ The tests cover billing behavior, assertions, verdict rules, execution tracking,
 
 This is an independent public portfolio project and a working MVP using small synthetic cases. The current pricing model is a flat energy rate. It does not process real payments or yet test real baseline/candidate release builds.
 
-**Verified in Databricks:** the healthy billing checks, wrong-amount FAIL → corrected PASS examples, and a completed execution with seven saved scenario snapshots.
+**Verified in Databricks:** the original healthy billing checks, wrong-amount FAIL → corrected PASS examples, and a completed execution with seven saved scenario snapshots. A generated two-session Gold result also shows 28 checks and PASS for baseline, candidate and overall; see the [recorded result](docs/02-runbook.md#confirmed-generated-gold-result).
 
-**Implemented, with Databricks verification still to complete:** generated sessions through Gold, their healthy → faulty → healthy checks, unchanged counts on repeat ingestion, direct inspection of the missing-record snapshots, and interruption/recovery checks that prove an older PASS cannot hide a failed attempt.
+**Still to verify in Databricks:** the generated job completion record, deliberate billing errors followed by a healthy rerun, unchanged counts on repeat ingestion, missing-record snapshots, and recovery after an interrupted run.
 
 The next milestones are:
 
-1. **Verify the complete generated path:** check two sessions through Gold, the deliberate amount error, stable reruns and failed-attempt blocking in Databricks.
+1. **Finish the generated-session checks:** confirm the job completed, then test the deliberate amount error, stable reruns and failed-attempt blocking in Databricks.
 2. **Handle broader incoming data:** add a place to review rejected records, more input formats, late-event rules and tested recovery/backfill procedures.
 3. **Broaden the billing scenarios:** add duplicate records, wrong energy, wrong tariffs and retry failures.
 4. **Test real releases:** replace mocks with external release replay and add GitHub checks tied to the exact Databricks execution.

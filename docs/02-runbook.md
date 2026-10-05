@@ -29,7 +29,7 @@ The following results have been confirmed in Databricks:
 - On 2026-09-21, the Python-generated amount tests were confirmed. `mock-amount-bad-v1` has a passing baseline, a failing candidate and overall FAIL, with 13 passing / 1 failing checks. `mock-amount-fixed-v1` has PASS for both releases and overall, with 14 passing / 0 failing checks.
 - Execution `192226331898541:436138745571440:0`, started on 2026-09-23, was confirmed as `SUCCEEDED`, with seven saved result snapshots for seven distinct scenarios. Earlier failed attempts remain `FAILED` with no snapshots.
 
-The successful execution confirms that the original result capture works after the Spark filter fix. The exact financial values in those snapshots and the deliberate failure test before Gold still need checking. The repaired generated-batch path is implemented and covered by local tests, but its deployment, healthy/faulty results, repeat runs and interruption behavior still need Databricks verification.
+The successful execution confirms that the original result capture works after the Spark filter fix. The exact financial values in those snapshots and the deliberate failure test before Gold still need checking. On 2026-10-04, a [generated Gold result](#confirmed-generated-gold-result) was also confirmed: two sessions, 28 checks and all three verdicts PASS. Its job completion record, deliberate-error test, repeat runs and recovery still need checking.
 
 The job keeps three runs with fixed responses (`smoke-run-v1`, `amount-bad-v1`, `amount-fixed-v1`) and four runs whose responses are calculated by the mock (`mock-amount-bad-v1`, `mock-amount-fixed-v1`, `mock-missing-cdr-bad-v1`, `mock-missing-cdr-fixed-v1`). Each uses one session (`txn-smoke-v1`), the same three OCPP-shaped charging events and one EUR energy tariff. A CDR, or charge detail record, is the billing record returned for a session.
 
@@ -327,7 +327,7 @@ Change the SQL filter to `generated-v1-sessions-repaired-002`: expect another **
 - If generation fails, **do not start ingestion**. Rerun the same batch with the same settings. If it reports a partial or conflicting file, stop and investigate; the generator will not overwrite it. A safe cleanup and recovery procedure is still future work.
 - The job has no schedule or continuous loop. It does not need a pause button: it stops after one batch. Scheduled generation and pause/resume controls can be added later.
 - Auto Loader reads all available incoming files, not just the batch in the command you ran. Filter checks by the generated `run_id` so older sample files do not change the expected counts.
-- Local tests check generated data and publishing behavior with substitutes for storage. Deployment, the **6 → 6** repeat check and recovery still need verification in Databricks. Generation and ingestion do not write billing results. The evaluator below records those results in its own execution tables.
+- Local tests check generated data and publishing behavior with substitutes for storage. The six-event landing count, the **6 → 6** repeat check and recovery still need direct verification in Databricks. Generation and ingestion do not write billing results. The evaluator below records those results in its own execution tables.
 
 
 ### Evaluate generated batches through Gold
@@ -335,6 +335,24 @@ Change the SQL filter to `generated-v1-sessions-repaired-002`: expect another **
 The `evaluate_generated_batch` job completes the path from landed events to billing results. It reads **one selected batch**, validates all declared sessions, runs baseline and candidate billing mocks, calculates the expected charges separately in SQL, and saves the checks and verdict for that execution.
 
 Its two job parameters are `batch_id` (default `sessions-repaired-001`) and `candidate_mode` (`healthy` by default, or `amount_error`). It allows one run at a time and stops when the batch is finished. It does not schedule more work or modify the source files, landing rows or Auto Loader checkpoint.
+
+#### Confirmed generated Gold result
+
+On 2026-10-04, a user-provided SQL result showed execution `1101351879096886:604035863697496:0` with **2 sessions, 28 checks, and PASS for baseline, candidate and overall**.
+
+This confirms the saved healthy Gold result. The matching job completion record, deliberate-error test and repeat-run checks have not yet been confirmed.
+
+To see saved results without joining layers:
+
+```sql
+SELECT execution_id, session_count, assertion_count,
+       baseline_verdict, candidate_verdict, verdict
+FROM workspace.chargeassert_dev_gold.generated_execution_verdict
+ORDER BY captured_at DESC
+LIMIT 10;
+```
+
+Match `execution_id` to the one printed by your command. This query shows saved billing results; use [the exact-execution check](../sql/15_check_generated_billing.sql) to also confirm the job completed successfully.
 
 #### Fresh batch, healthy result, deliberate error
 
@@ -440,7 +458,7 @@ Do not delete files, reset checkpoints, drop tables or overwrite earlier billing
 
 This version checks one bounded batch of up to 1,000 synthetic sessions, with at most 10,000 received lines including copies. It still uses mock billing, a flat EUR energy tariff and the supported final-CDR subset. Structured quarantine, arbitrary input schemas, late-event policies, external release replay and recovery after interrupted writes need further work. Separate generated tables and single-run jobs do not stop manual or external writes to those tables.
 
-Local tests exercise generation, validation, rounding, independent SQL comparisons, complete capture and failure handling through adapters. Native Spark/Delta execution, deployment, healthy → faulty → healthy results, rerun counts and interrupted-job recovery must still be verified in Databricks.
+Local tests cover generation, validation, rounding, independent SQL comparisons, result capture and failure handling. The two-session healthy Gold result is confirmed in Databricks. Its job completion record, deliberate-error result, healthy rerun, stable counts and recovery after interruption still need checking.
 
 ## Silver — produce trusted business records
 
@@ -1041,18 +1059,18 @@ The items below separate what already works from what still needs to be built or
 
 | Workstream | Still missing |
 | --- | --- |
-| Repeatable inputs | The seeded generator and selected-batch evaluator are implemented. Verify generated-to-Gold runs in Databricks, then add a broader versioned scenario registry and real baseline/candidate Git commit IDs. Generated evaluations bind input/code hashes and intended sessions; original saved-response runs keep synthetic SHA labels and the smoke tariff hash still covers an identifier. |
+| Repeatable inputs | The seeded generator and selected-batch evaluator have produced a healthy two-session Gold result. Verify repeat runs in Databricks, then add a broader versioned scenario registry and real baseline/candidate Git commit IDs. Generated evaluations bind input/code hashes and intended sessions; original saved-response runs keep synthetic SHA labels and the smoke tariff hash still covers an identifier. |
 | Public data and file ingestion | Verify Auto Loader and interrupted-run recovery in Databricks. Add external GCS files, versioned ACN-Data charging behavior and French IRVE station data, and explain how they form synthetic inputs. The generated adapter validates sessions-v1 envelopes and handles identical event copies; quarantine, broader schema changes, late arrivals and safe backfills remain. Do not describe composed inputs as real French transactions or actual operator tariffs. |
 | Replay and deliberate faults | Wrong-amount and missing-CDR mock pairs already use identical inputs; the missing-CDR results still need direct workspace verification. Add duplicate charges and the other required cases, then replay inputs against external releases over HTTP. Record events and retry attempts so the first difference can be found. Current mocks do not run real software release builds. |
 | Session validation | Generated batches now check declared identities, complete event sequences, timestamps and nondecreasing Wh readings before billing. Broaden support for other meter measurements, units/multipliers, resets and external station/session identities. Define late, missing and conflicting-event policies beyond the bounded synthetic contract. |
 | Tariff selection | Generated sessions now have explicit session/tariff links; the original seven mappings remain fixed. Add multiple tariff periods in Bronze and pricing across tariff boundaries. Extend pricing rules only when a scenario needs them. |
-| Independent expected charge | The independent SQL calculation now covers every registered session in the selected generated batch, as well as the original fixtures. Verify it in Databricks and broaden supported scenarios, tariffs and meter formats while keeping it separate from Python billing mocks. |
+| Independent expected charge | The independent SQL calculation now covers every registered session in the selected generated batch, as well as the original fixtures. The healthy two-session Gold result is confirmed. Check deliberate errors and broaden supported scenarios, tariffs and meter formats while keeping the calculation separate from Python billing mocks. |
 | Reported billing records | Read responses from external release tests and support more than the current final-CDR fields. Parsing, removal of equivalent copies and rejection of conflicting records already work. Still needed: Gold results for those conflicts, broader Session/CDR support and a general mapping between session IDs. Keep the original saved responses as regression test evidence. |
-| Billing checks | The healthy 14-check result is verified in Databricks. Local tests also cover failures in the expected calculation, CDR count, energy, duration, currency, tariff ID and amount. Add direct baseline-versus-candidate checks, tariff-version evidence, checks that retries and late events do not change the correct result, and clear reports for failures in earlier tasks. |
-| Verdicts and evidence | The original successful seven-snapshot execution is confirmed; inspect its financial snapshots and complete the A/B/C failure test. Generated capture now checks a complete session inventory and binds input/code hashes to an exact attempt. Verify those new receipts and immutable snapshots in Databricks. Full source/Silver versioning, protection from unrelated writers, first-difference traces and business exposure summaries remain. |
+| Billing checks | The original healthy 14-check result and a generated two-session Gold result with 28 checks are confirmed in Databricks. Local tests also cover failures in the expected calculation, CDR count, energy, duration, currency, tariff ID and amount. Add direct baseline-versus-candidate checks, tariff-version evidence, checks that retries and late events do not change the correct result, and clear reports for failures in earlier tasks. |
+| Verdicts and evidence | The original successful seven-snapshot execution is confirmed; inspect its financial snapshots and complete the A/B/C failure test. Generated capture now checks a complete session inventory and binds input/code hashes to an exact attempt. One healthy generated Gold result is confirmed; check its completion receipt and prove snapshots stay unchanged after reruns. Full source/Silver versioning, protection from unrelated writers, first-difference traces and business exposure summaries remain. |
 | Estimated financial impact | Calculate the change in defect rate × assumed monthly sessions × assumed impact per affected session. Show every assumption and separate customer overcharges from potentially unbilled revenue. Label these numbers as estimates, never actual losses or proven savings. |
 | GitHub automation | Add GitHub Actions that authenticate to Databricks, run the checks, retrieve the exact execution/scenario result and publish PASS/FAIL with evidence links. Configure that check as required for release approval. Require a successful Databricks job, a successful execution record and a passing snapshot; never use an older success instead. |
-| Verification and demo | Verify the generated two-session path: 28 PASS, then 26 PASS / 2 FAIL with amount_error, then a fresh healthy execution with 28 PASS. Check stable session counts and unchanged older snapshots. Also finish generated ingestion 6 → 6, sample files 3 → 3 → 6 → 6, missing-CDR snapshot checks, A/B/C failure and interrupted-run recovery. The PDF examples of 50,000 sessions and EUR 24,380 are not measured results. |
+| Verification and demo | The generated healthy Gold result is confirmed: two sessions, 28 checks and all verdicts PASS. Confirm its completion receipt, then test 26 PASS / 2 FAIL with amount_error and a fresh healthy execution with 28 PASS. Check stable session counts and unchanged older snapshots. Also finish generated ingestion 6 → 6, sample files 3 → 3 → 6 → 6, missing-CDR snapshot checks, A/B/C failure and interrupted-run recovery. The PDF examples of 50,000 sessions and EUR 24,380 are not measured results. |
 | Runtime access | Add explicit permissions when introducing a separate CI or runtime identity. Current development relies on schema ownership. |
 
 ### Six flagship scenarios
@@ -1068,7 +1086,7 @@ The items below separate what already works from what still needs to be built or
 
 ## Next implementation step
 
-1. **Verify the repaired generated path in Databricks.** Use a fresh batch name, check six landed events for two sessions, then run healthy → amount_error → healthy. Confirm 28 PASS → 26 PASS / 2 FAIL → 28 PASS in exact-execution snapshots, with stable session counts and older results intact.
+1. **Finish the generated-session checks in Databricks.** The healthy two-session Gold result is confirmed. Check its completion record and six landed events, then test amount_error → healthy on the same batch. Expect 26 PASS / 2 FAIL → 28 PASS, with stable session counts and older results intact.
 2. **Prove failure handling and recovery.** Test incomplete input, a failure before Gold and an interrupted attempt. Each requested failed or incomplete execution must return BLOCKED while older PASS evidence stays stored. Also complete ingestion repeat checks and design a review path for rejected records.
 3. **Finish the original billing evidence checks.** Inspect the missing-CDR run's 8 PASS / 1 FAIL / 5 BLOCKED checks and its corrected 14 PASS result. Run the original A/B/C failure demonstration without repairing or rewriting earlier attempts.
 4. **Broaden the release tests and measure them.** Add duplicate charges, wrong energy, wrong tariffs, retries and late events. Then add external release replay, documented public data, measured runtime/cost and GitHub checks tied to exact execution evidence.
