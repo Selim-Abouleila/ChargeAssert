@@ -1,0 +1,22 @@
+resources:
+  jobs:
+    evaluate_generated_batch:
+      name: chargeassert_dev_evaluate_generated_batch
+      description: Validate a complete generated batch, compare independent charges with both billing mocks, and save Gold evidence.
+      max_concurrent_runs: 1
+      parameters:
+        - name: batch_id
+          default: sessions-repaired-001
+        - name: candidate_mode
+          default: healthy
+      tasks:
+        - task_key: evaluate_batch
+          notebook_task:
+            notebook_path: ../notebooks/evaluate_generated_batch.py
+            base_parameters:
+              catalog_name: ${var.catalog_name}
+              batch_id: "{{job.parameters.batch_id}}"
+              candidate_mode: "{{job.parameters.candidate_mode}}"
+              job_id: "{{job.id}}"
+              job_run_id: "{{job.run_id}}"
+              repair_count: "{{job.repair_count}}"

@@ -1,3 +1,5 @@
+-- This fixture pipeline processes only its seven registered runs.
+-- Other retained evidence is isolated and must use its own explicit pipeline.
 CREATE TABLE IF NOT EXISTS IDENTIFIER(:table_name) (
   run_id STRING NOT NULL,
   release_role STRING NOT NULL,
@@ -45,7 +47,7 @@ USING (
         'STRUCT<country_code: STRING, party_id: STRING, id: STRING, session_id: STRING, start_date_time: TIMESTAMP, end_date_time: TIMESTAMP, currency: STRING, total_energy: DECIMAL(18,6), total_time: DECIMAL(18,6), total_cost: STRUCT<excl_vat: DECIMAL(18,6)>, credit: BOOLEAN, charging_periods: ARRAY<STRUCT<tariff_id: STRING>>>',
         map('mode', 'FAILFAST')
       ) AS cdr
-    FROM IDENTIFIER(:raw_cdrs_table_name)
+    FROM (SELECT * FROM IDENTIFIER(:raw_cdrs_table_name) WHERE run_id IN ('smoke-run-v1', 'amount-bad-v1', 'amount-fixed-v1', 'mock-amount-bad-v1', 'mock-amount-fixed-v1', 'mock-missing-cdr-bad-v1', 'mock-missing-cdr-fixed-v1'))
   ), validated_cdrs AS (
     SELECT
       run_id,

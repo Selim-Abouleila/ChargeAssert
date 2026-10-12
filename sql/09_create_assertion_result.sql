@@ -1,3 +1,5 @@
+-- This fixture pipeline processes only its seven registered runs.
+-- Other retained evidence is isolated and must use its own explicit pipeline.
 -- Opt-in operational failure test. Stop before writing Gold so an older PASS
 -- remains present and the execution-specific consumer can prove it blocks it.
 SELECT assert_true(
@@ -28,7 +30,7 @@ TBLPROPERTIES (
   'chargeassert.environment' = 'dev'
 );
 
--- Reconcile the complete current Silver inputs. In particular, expected sessions
+-- Reconcile the registered fixture Silver inputs. In particular, expected sessions
 -- drive BOTH releases even when one release returns no CDR. Actual-only sessions
 -- and completed sessions without an oracle must not disappear through an inner join.
 MERGE INTO IDENTIFIER(:table_name) AS target
@@ -45,7 +47,7 @@ USING (
       MAX(tariff_id) AS expected_tariff_id,
       MAX(tariff_valid_from) AS tariff_valid_from,
       MAX(tariff_payload_hash) AS tariff_payload_hash
-    FROM IDENTIFIER(:expected_ledger_table_name)
+    FROM (SELECT * FROM IDENTIFIER(:expected_ledger_table_name) WHERE run_id IN ('smoke-run-v1', 'amount-bad-v1', 'amount-fixed-v1', 'mock-amount-bad-v1', 'mock-amount-fixed-v1', 'mock-missing-cdr-bad-v1', 'mock-missing-cdr-fixed-v1'))
     GROUP BY run_id, session_id
   ), lifecycle_by_session AS (
     SELECT
@@ -54,7 +56,7 @@ USING (
         AND ended_at >= started_at THEN 1 ELSE 0 END) AS valid_completed_rows,
       MAX(started_at) AS started_at,
       MAX(ended_at) AS ended_at
-    FROM IDENTIFIER(:session_lifecycle_table_name)
+    FROM (SELECT * FROM IDENTIFIER(:session_lifecycle_table_name) WHERE run_id IN ('smoke-run-v1', 'amount-bad-v1', 'amount-fixed-v1', 'mock-amount-bad-v1', 'mock-amount-fixed-v1', 'mock-missing-cdr-bad-v1', 'mock-missing-cdr-fixed-v1'))
     GROUP BY run_id, session_id
   ), actual_by_session AS (
     SELECT
@@ -72,7 +74,7 @@ USING (
         'amount', actual_amount, 'currency', currency, 'tariff_id', tariff_id,
         'source_payload_hashes', sort_array(source_payload_hashes)
       ))) AS actual_records
-    FROM IDENTIFIER(:actual_ledger_table_name)
+    FROM (SELECT * FROM IDENTIFIER(:actual_ledger_table_name) WHERE run_id IN ('smoke-run-v1', 'amount-bad-v1', 'amount-fixed-v1', 'mock-amount-bad-v1', 'mock-amount-fixed-v1', 'mock-missing-cdr-bad-v1', 'mock-missing-cdr-fixed-v1'))
     WHERE release_role IN ('baseline', 'candidate') AND cdr_type = 'FINAL'
     GROUP BY run_id, release_role, session_id
   ), session_releases AS (
@@ -80,7 +82,7 @@ USING (
     FROM expected_by_session AS e CROSS JOIN release_roles AS r
     UNION
     SELECT s.run_id, s.session_id, r.release_role
-    FROM IDENTIFIER(:session_lifecycle_table_name) AS s
+    FROM (SELECT * FROM IDENTIFIER(:session_lifecycle_table_name) WHERE run_id IN ('smoke-run-v1', 'amount-bad-v1', 'amount-fixed-v1', 'mock-amount-bad-v1', 'mock-amount-fixed-v1', 'mock-missing-cdr-bad-v1', 'mock-missing-cdr-fixed-v1')) AS s
     CROSS JOIN release_roles AS r
     WHERE s.status = 'Completed'
     UNION
@@ -229,9 +231,9 @@ WHEN NOT MATCHED THEN INSERT (
   source.expected_value, source.actual_value, source.difference, source.status,
   source.severity, source.message, source.evidence
 )
--- This table is the current derived snapshot over ALL inputs above. Remove stale
+-- This table is the current derived snapshot over the registered fixture inputs above. Remove stale
 -- results if a source session is removed; never delete Bronze or Silver evidence.
-WHEN NOT MATCHED BY SOURCE THEN DELETE;
+WHEN NOT MATCHED BY SOURCE AND target.run_id IN ('smoke-run-v1', 'amount-bad-v1', 'amount-fixed-v1', 'mock-amount-bad-v1', 'mock-amount-fixed-v1', 'mock-missing-cdr-bad-v1', 'mock-missing-cdr-fixed-v1') THEN DELETE;
 
 -- Only the fixed healthy smoke run must pass here. A financial FAIL/BLOCKED in
 -- another run is a stored result, not a SQL exception or a release verdict.

@@ -1,4 +1,5 @@
 -- Read-only checks for the separate incremental file-ingestion demonstration.
+-- Counts filter original fixture files because generated batches share the table.
 -- Default dev catalog shown; change the table qualifier if catalog_name differs.
 -- Run after each ingest_ocpp_files job has finished successfully.
 -- First-time sequence: batch_001 => 3 rows; repeat => 3;
@@ -8,7 +9,8 @@ SELECT
   COUNT(*) AS landed_rows,
   COUNT(DISTINCT source_file_path) AS source_files,
   COUNT(DISTINCT record_hash) AS distinct_record_hashes
-FROM workspace.chargeassert_dev_bronze.ocpp_events_landing;
+FROM workspace.chargeassert_dev_bronze.ocpp_events_landing
+WHERE source_file_name IN ('batch_001.jsonl', 'batch_002.jsonl');
 
 -- Expect one file with three rows after batch_001, then two files with three each.
 -- Repeated ingestion must leave row counts and first/last ingestion times unchanged.
@@ -20,6 +22,7 @@ SELECT
   MIN(ingested_at) AS first_ingested_at,
   MAX(ingested_at) AS last_ingested_at
 FROM workspace.chargeassert_dev_bronze.ocpp_events_landing
+WHERE source_file_name IN ('batch_001.jsonl', 'batch_002.jsonl')
 GROUP BY source_file_name, source_file_path
 ORDER BY source_file_name, source_file_path;
 

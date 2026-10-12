@@ -1,3 +1,5 @@
+-- This fixture pipeline processes only its seven registered runs.
+-- Other retained evidence is isolated and must use its own explicit pipeline.
 CREATE TABLE IF NOT EXISTS IDENTIFIER(:table_name) (
   run_id STRING NOT NULL
     COMMENT 'ChargeAssert test run that owns this tariff snapshot.',
@@ -33,7 +35,7 @@ WITH parsed_tariffs AS (
       'STRUCT<id: STRING, currency: STRING, elements: ARRAY<STRUCT<price_components: ARRAY<STRUCT<type: STRING, price: DECIMAL(18,6), step_size: INT>>>>>',
       map('mode', 'FAILFAST')
     ) AS tariff
-  FROM IDENTIFIER(:raw_tariffs_table_name)
+  FROM (SELECT * FROM IDENTIFIER(:raw_tariffs_table_name) WHERE run_id IN ('smoke-run-v1', 'amount-bad-v1', 'amount-fixed-v1', 'mock-amount-bad-v1', 'mock-amount-fixed-v1', 'mock-missing-cdr-bad-v1', 'mock-missing-cdr-fixed-v1'))
 )
 SELECT assert_true(
   COUNT(*) = count_if(COALESCE(
@@ -67,7 +69,7 @@ FROM parsed_tariffs;
 WITH distinct_tariffs AS (
   SELECT DISTINCT
     run_id, tariff_id, valid_from, valid_to, currency, payload, payload_hash
-  FROM IDENTIFIER(:raw_tariffs_table_name)
+  FROM (SELECT * FROM IDENTIFIER(:raw_tariffs_table_name) WHERE run_id IN ('smoke-run-v1', 'amount-bad-v1', 'amount-fixed-v1', 'mock-amount-bad-v1', 'mock-amount-fixed-v1', 'mock-missing-cdr-bad-v1', 'mock-missing-cdr-fixed-v1'))
 ), ordered_periods AS (
   SELECT
     *,
@@ -101,7 +103,7 @@ USING (
       map('mode', 'FAILFAST')
     ).elements, 1).price_components AS price_components,
     payload_hash AS source_payload_hash
-  FROM IDENTIFIER(:raw_tariffs_table_name)
+  FROM (SELECT * FROM IDENTIFIER(:raw_tariffs_table_name) WHERE run_id IN ('smoke-run-v1', 'amount-bad-v1', 'amount-fixed-v1', 'mock-amount-bad-v1', 'mock-amount-fixed-v1', 'mock-missing-cdr-bad-v1', 'mock-missing-cdr-fixed-v1'))
 ) AS source
 ON target.run_id = source.run_id
 AND target.tariff_id = source.tariff_id
@@ -149,7 +151,7 @@ SELECT assert_true(
 FROM IDENTIFIER(:table_name) AS history
 LEFT JOIN (
   SELECT DISTINCT run_id, tariff_id, valid_from, payload, payload_hash
-  FROM IDENTIFIER(:raw_tariffs_table_name)
+  FROM (SELECT * FROM IDENTIFIER(:raw_tariffs_table_name) WHERE run_id IN ('smoke-run-v1', 'amount-bad-v1', 'amount-fixed-v1', 'mock-amount-bad-v1', 'mock-amount-fixed-v1', 'mock-missing-cdr-bad-v1', 'mock-missing-cdr-fixed-v1'))
 ) AS raw
   ON history.run_id = raw.run_id
   AND history.tariff_id = raw.tariff_id

@@ -1,3 +1,5 @@
+-- This fixture pipeline processes only its seven registered runs.
+-- Other retained evidence is isolated and must use its own explicit pipeline.
 CREATE TABLE IF NOT EXISTS IDENTIFIER(:table_name) (
   run_id STRING NOT NULL,
   scenario_id STRING,
@@ -28,17 +30,17 @@ TBLPROPERTIES (
   'chargeassert.environment' = 'dev'
 );
 
--- Evaluate all retained runs, including empty manifests and orphan data. Coverage
+-- Evaluate the registered fixture runs, including empty manifests and orphan data within that inventory. Coverage
 -- comes from Silver, not the assertions that happened to be produced. A missing
 -- release, session or rule must never turn into a smaller all-PASS result set.
 MERGE INTO IDENTIFIER(:table_name) AS target
 USING (
   WITH runs AS (
-    SELECT run_id FROM IDENTIFIER(:run_manifest_table_name)
-    UNION SELECT run_id FROM IDENTIFIER(:expected_ledger_table_name)
-    UNION SELECT run_id FROM IDENTIFIER(:session_lifecycle_table_name)
-    UNION SELECT run_id FROM IDENTIFIER(:actual_ledger_table_name)
-    UNION SELECT run_id FROM IDENTIFIER(:assertion_result_table_name)
+    SELECT run_id FROM (SELECT * FROM IDENTIFIER(:run_manifest_table_name) WHERE run_id IN ('smoke-run-v1', 'amount-bad-v1', 'amount-fixed-v1', 'mock-amount-bad-v1', 'mock-amount-fixed-v1', 'mock-missing-cdr-bad-v1', 'mock-missing-cdr-fixed-v1'))
+    UNION SELECT run_id FROM (SELECT * FROM IDENTIFIER(:expected_ledger_table_name) WHERE run_id IN ('smoke-run-v1', 'amount-bad-v1', 'amount-fixed-v1', 'mock-amount-bad-v1', 'mock-amount-fixed-v1', 'mock-missing-cdr-bad-v1', 'mock-missing-cdr-fixed-v1'))
+    UNION SELECT run_id FROM (SELECT * FROM IDENTIFIER(:session_lifecycle_table_name) WHERE run_id IN ('smoke-run-v1', 'amount-bad-v1', 'amount-fixed-v1', 'mock-amount-bad-v1', 'mock-amount-fixed-v1', 'mock-missing-cdr-bad-v1', 'mock-missing-cdr-fixed-v1'))
+    UNION SELECT run_id FROM (SELECT * FROM IDENTIFIER(:actual_ledger_table_name) WHERE run_id IN ('smoke-run-v1', 'amount-bad-v1', 'amount-fixed-v1', 'mock-amount-bad-v1', 'mock-amount-fixed-v1', 'mock-missing-cdr-bad-v1', 'mock-missing-cdr-fixed-v1'))
+    UNION SELECT run_id FROM (SELECT * FROM IDENTIFIER(:assertion_result_table_name) WHERE run_id IN ('smoke-run-v1', 'amount-bad-v1', 'amount-fixed-v1', 'mock-amount-bad-v1', 'mock-amount-fixed-v1', 'mock-missing-cdr-bad-v1', 'mock-missing-cdr-fixed-v1'))
   ), manifests AS (
     SELECT run_id, COUNT(*) AS manifest_rows,
       -- Never select arbitrary provenance from duplicate/conflicting manifests.
@@ -47,7 +49,7 @@ USING (
       CASE WHEN COUNT(*) = 1 THEN MAX(baseline_sha) END AS baseline_sha,
       CASE WHEN COUNT(*) = 1 THEN MAX(candidate_sha) END AS candidate_sha,
       CASE WHEN COUNT(*) = 1 THEN MAX(tariff_hash) END AS tariff_hash
-    FROM IDENTIFIER(:run_manifest_table_name)
+    FROM (SELECT * FROM IDENTIFIER(:run_manifest_table_name) WHERE run_id IN ('smoke-run-v1', 'amount-bad-v1', 'amount-fixed-v1', 'mock-amount-bad-v1', 'mock-amount-fixed-v1', 'mock-missing-cdr-bad-v1', 'mock-missing-cdr-fixed-v1'))
     GROUP BY run_id
   ), release_roles AS (
     SELECT 'baseline' AS release_role UNION ALL SELECT 'candidate'
@@ -61,16 +63,16 @@ USING (
     UNION ALL SELECT 'tariff_match'
     UNION ALL SELECT 'amount_match'
   ), expected_sessions AS (
-    SELECT run_id, session_id FROM IDENTIFIER(:expected_ledger_table_name)
+    SELECT run_id, session_id FROM (SELECT * FROM IDENTIFIER(:expected_ledger_table_name) WHERE run_id IN ('smoke-run-v1', 'amount-bad-v1', 'amount-fixed-v1', 'mock-amount-bad-v1', 'mock-amount-fixed-v1', 'mock-missing-cdr-bad-v1', 'mock-missing-cdr-fixed-v1'))
     UNION
-    SELECT run_id, session_id FROM IDENTIFIER(:session_lifecycle_table_name)
+    SELECT run_id, session_id FROM (SELECT * FROM IDENTIFIER(:session_lifecycle_table_name) WHERE run_id IN ('smoke-run-v1', 'amount-bad-v1', 'amount-fixed-v1', 'mock-amount-bad-v1', 'mock-amount-fixed-v1', 'mock-missing-cdr-bad-v1', 'mock-missing-cdr-fixed-v1'))
     WHERE status = 'Completed'
   ), session_releases AS (
     SELECT s.run_id, r.release_role, s.session_id
     FROM expected_sessions AS s CROSS JOIN release_roles AS r
     UNION
     SELECT run_id, release_role, session_id
-    FROM IDENTIFIER(:actual_ledger_table_name)
+    FROM (SELECT * FROM IDENTIFIER(:actual_ledger_table_name) WHERE run_id IN ('smoke-run-v1', 'amount-bad-v1', 'amount-fixed-v1', 'mock-amount-bad-v1', 'mock-amount-fixed-v1', 'mock-missing-cdr-bad-v1', 'mock-missing-cdr-fixed-v1'))
     WHERE release_role IN ('baseline', 'candidate') AND cdr_type = 'FINAL'
   ), required_checks AS (
     SELECT s.run_id, s.release_role, s.session_id, r.assertion_id
@@ -83,7 +85,7 @@ USING (
       SUM(CASE WHEN status = 'BLOCKED' THEN 1 ELSE 0 END) AS blocked_assertions,
       SUM(CASE WHEN status IS NULL OR status NOT IN ('PASS', 'FAIL', 'BLOCKED')
         THEN 1 ELSE 0 END) AS invalid_assertions
-    FROM IDENTIFIER(:assertion_result_table_name)
+    FROM (SELECT * FROM IDENTIFIER(:assertion_result_table_name) WHERE run_id IN ('smoke-run-v1', 'amount-bad-v1', 'amount-fixed-v1', 'mock-amount-bad-v1', 'mock-amount-fixed-v1', 'mock-missing-cdr-bad-v1', 'mock-missing-cdr-fixed-v1'))
     GROUP BY run_id, release_role, session_id, assertion_id
   ), checked_keys AS (
     SELECT a.*,
@@ -245,8 +247,8 @@ USING (
 ON target.run_id = source.run_id
 WHEN MATCHED THEN UPDATE SET *
 WHEN NOT MATCHED THEN INSERT *
--- Current derived snapshot over all retained runs, matching assertion_result.
-WHEN NOT MATCHED BY SOURCE THEN DELETE;
+-- Current derived snapshot over the registered fixture runs, matching assertion_result.
+WHEN NOT MATCHED BY SOURCE AND target.run_id IN ('smoke-run-v1', 'amount-bad-v1', 'amount-fixed-v1', 'mock-amount-bad-v1', 'mock-amount-fixed-v1', 'mock-missing-cdr-bad-v1', 'mock-missing-cdr-fixed-v1') THEN DELETE;
 
 -- Financial FAIL verdicts are data, not SQL errors. Only this known healthy
 -- fixture is required to pass. A future GitHub consumer must read the verdict
@@ -308,7 +310,7 @@ SELECT assert_true(
     ) = 2,
   'All amount fixtures must retain the EUR 5.63 independent expectation; bad reports EUR 6.50 (+0.87), fixed reports EUR 5.63.'
 )
-FROM IDENTIFIER(:assertion_result_table_name)
+FROM (SELECT * FROM IDENTIFIER(:assertion_result_table_name) WHERE run_id IN ('smoke-run-v1', 'amount-bad-v1', 'amount-fixed-v1', 'mock-amount-bad-v1', 'mock-amount-fixed-v1', 'mock-missing-cdr-bad-v1', 'mock-missing-cdr-fixed-v1'))
 WHERE run_id IN ('amount-bad-v1', 'amount-fixed-v1',
   'mock-amount-bad-v1', 'mock-amount-fixed-v1')
   AND release_role = 'candidate' AND assertion_id = 'amount_match';
@@ -359,7 +361,7 @@ SELECT assert_true(
     ) = 1,
   'Missing-CDR candidate must report zero final CDRs against one expected; its correction must report exactly one.'
 )
-FROM IDENTIFIER(:assertion_result_table_name)
+FROM (SELECT * FROM IDENTIFIER(:assertion_result_table_name) WHERE run_id IN ('smoke-run-v1', 'amount-bad-v1', 'amount-fixed-v1', 'mock-amount-bad-v1', 'mock-amount-fixed-v1', 'mock-missing-cdr-bad-v1', 'mock-missing-cdr-fixed-v1'))
 WHERE run_id IN ('mock-missing-cdr-bad-v1', 'mock-missing-cdr-fixed-v1')
   AND release_role = 'candidate' AND assertion_id = 'final_cdr_count';
 
@@ -371,7 +373,7 @@ SELECT assert_true(
     ) = 5,
   'Missing candidate CDR must block all five value checks without fabricating an actual value or monetary difference.'
 )
-FROM IDENTIFIER(:assertion_result_table_name)
+FROM (SELECT * FROM IDENTIFIER(:assertion_result_table_name) WHERE run_id IN ('smoke-run-v1', 'amount-bad-v1', 'amount-fixed-v1', 'mock-amount-bad-v1', 'mock-amount-fixed-v1', 'mock-missing-cdr-bad-v1', 'mock-missing-cdr-fixed-v1'))
 WHERE run_id = 'mock-missing-cdr-bad-v1' AND release_role = 'candidate'
   AND assertion_id IN ('energy_match', 'duration_match', 'currency_match', 'tariff_match', 'amount_match');
 

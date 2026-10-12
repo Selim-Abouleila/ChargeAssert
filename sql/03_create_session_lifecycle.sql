@@ -1,3 +1,5 @@
+-- This fixture pipeline processes only its seven registered runs.
+-- Other retained evidence is isolated and must use its own explicit pipeline.
 CREATE TABLE IF NOT EXISTS IDENTIFIER(:table_name) (
   run_id STRING NOT NULL
     COMMENT 'ChargeAssert test run for this session.',
@@ -35,7 +37,7 @@ USING (
       WHEN count_if(event_type = 'Ended') > 0 THEN 'Completed'
       ELSE 'In Progress' 
     END AS status
-  FROM IDENTIFIER(:raw_events_table_name)
+  FROM (SELECT * FROM IDENTIFIER(:raw_events_table_name) WHERE run_id IN ('smoke-run-v1', 'amount-bad-v1', 'amount-fixed-v1', 'mock-amount-bad-v1', 'mock-amount-fixed-v1', 'mock-missing-cdr-bad-v1', 'mock-missing-cdr-fixed-v1'))
   GROUP BY run_id, transaction_id
 ) AS source
 ON target.run_id = source.run_id
