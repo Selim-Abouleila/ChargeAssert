@@ -60,7 +60,7 @@ Both modes use the same charging inputs. They keep separate results. Repeating t
 
 The original amount examples and a completed execution with seven snapshots have been verified in Databricks. A [generated Gold result](03-generated-sessions.md#confirmed-result) now confirms two sessions, 28 checks and PASS for both billing versions and overall. Its job completion record, deliberate-error test, repeat runs and failure recovery still need checking. Real release replay and automated GitHub checks remain planned.
 
-There are six manual jobs: `create_tables`, `publish_ingestion_demo`, `generate_sessions`, `ingest_ocpp_files`, `combined_ingestion` and `evaluate_generated_batch`. Each stops when its work finishes.
+There are seven manual jobs: `create_tables`, `publish_ingestion_demo`, `generate_sessions`, `ingest_ocpp_files`, `combined_ingestion`, `evaluate_generated_batch` and `run_generated_pipeline`. The last one runs generation, ingestion and evaluation in order with one command. It adds no tables. Each job stops when its work finishes.
 
 - [Original MVP brief](OVERVIEW.pdf) — the business problem and target scope.
 - [Full runbook](02-runbook.md) — table rules, field definitions, limitations and remaining work.

@@ -157,21 +157,20 @@ The [generated-session guide](docs/03-generated-sessions.md) covers this path fr
 After deployment, use a fresh batch name. Keep earlier files, results and checkpoints unchanged.
 
 ```bash
-databricks bundle run -t dev combined_ingestion --params batch_id=sessions-check-001,session_count=2,seed=42
-databricks bundle run -t dev evaluate_generated_batch --params batch_id=sessions-check-001,candidate_mode=healthy
+databricks bundle run -t dev run_generated_pipeline --params batch_id=sessions-pipeline-001,session_count=2,seed=42,candidate_mode=healthy
 ```
 
-The first command creates two simulated sessions and uses Auto Loader to load their six events into Bronze. `seed=42` makes the data repeatable. The second command checks both mock billing versions through Silver and Gold. Expect **28 PASS checks**.
+This parent job creates two simulated sessions, loads their six events with Auto Loader and checks both mock billing versions through Silver and Gold. Each step waits for the previous one to succeed. `seed=42` makes the data repeatable. Expect **28 PASS checks**.
 
 Then test whether it catches bad billing on the same sessions:
 
 ```bash
-databricks bundle run -t dev evaluate_generated_batch --params batch_id=sessions-check-001,candidate_mode=amount_error
+databricks bundle run -t dev run_generated_pipeline --params batch_id=sessions-pipeline-001,session_count=2,seed=42,candidate_mode=amount_error
 ```
 
 This adds EUR 0.87 to each candidate bill. Expect **26 PASS and 2 FAIL checks**: baseline PASS, candidate FAIL and overall FAIL. The job itself should succeed because it detected and saved the errors.
 
-Use the printed `execution_id` with [the generated execution check](sql/15_check_generated_billing.sql). Repeating the healthy command should produce another saved result without adding session records. Each command runs once and stops; no continuous service is configured.
+Open the parent run's `evaluate_generated_batch` child job and use the `execution_id` from its notebook output with [the generated execution check](sql/15_check_generated_billing.sql). Repeating the healthy command should save another result without adding session records. Each command runs once and stops.
 
 ## Local tests
 
@@ -179,7 +178,7 @@ Use the printed `execution_id` with [the generated execution check](sql/15_check
 python -B -m unittest discover -s tests -q
 ```
 
-**216 local tests pass.** They cover generation, validation, billing, verdicts, session coverage and saved results. Some use substitutes for Databricks and Spark, so workspace checks are still needed for deployment, repeat runs and recovery.
+**220 local tests pass.** They cover generation, validation, billing, verdicts, session coverage and saved results. Some use substitutes for Databricks and Spark, so workspace checks are still needed for deployment, repeat runs and recovery.
 
 ## Current status and next steps
 
@@ -187,7 +186,7 @@ This is a working portfolio MVP using simulated data and a flat energy rate. It 
 
 **Confirmed in Databricks:** the original correct/wrong-amount examples, an execution with seven saved test results, and a generated Gold result with **2 sessions, 28 checks and all verdicts PASS**. The [generated-session guide](docs/03-generated-sessions.md#confirmed-result) records that result.
 
-**Still to check:** the generated job's completion record, its deliberate-error test, stable repeat runs, recovery after interruption and the original missing-bill results.
+**Still to check:** the new parent workflow, the generated job's completion record, its deliberate-error test, stable repeat runs, recovery after interruption and the original missing-bill results.
 
 Next steps are to finish those checks, support more incoming data and billing cases, test real releases, and add GitHub release checks. Runtime, cost and throughput measurements are also planned. The [remaining-work list](docs/02-runbook.md#remaining-mvp-work) tracks the details.
 
