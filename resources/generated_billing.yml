@@ -26,8 +26,9 @@ resources:
       description: Generate one batch, load its events and check its bills through Gold.
       max_concurrent_runs: 1
       parameters:
+        # One name for this parent run, shared by generation and evaluation.
         - name: batch_id
-          default: sessions-pipeline-001
+          default: "sessions-{{job.run_id}}"
         - name: session_count
           default: "2"
         - name: seed

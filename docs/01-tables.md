@@ -54,13 +54,13 @@ Generated sessions have varied meter readings and durations. Each session has se
 | `candidate_mode=healthy` | PASS | PASS | 28 PASS |
 | `candidate_mode=amount_error` | PASS | FAIL | 26 PASS / 2 FAIL; each candidate amount is EUR 0.87 too high |
 
-Both modes use the same charging inputs. They keep separate results. Repeating the healthy evaluation adds a new execution snapshot without adding duplicate session records.
+For the same batch, both modes use the same charging inputs and keep separate results. Evaluating that batch again adds a new execution snapshot without adding duplicate session records. The full pipeline creates a new batch by default; set `batch_id` to reuse one.
 
 ## Current status and commands
 
 The original amount examples and a completed execution with seven snapshots have been verified in Databricks. A [generated Gold result](03-generated-sessions.md#confirmed-result) now confirms two sessions, 28 checks and PASS for both billing versions and overall. Its job completion record, deliberate-error test, repeat runs and failure recovery still need checking. Real release replay and automated GitHub checks remain planned.
 
-There are seven manual jobs: `create_tables`, `publish_ingestion_demo`, `generate_sessions`, `ingest_ocpp_files`, `combined_ingestion`, `evaluate_generated_batch` and `run_generated_pipeline`. The last one runs generation, ingestion and evaluation in order with one command. It adds no tables. Each job stops when its work finishes.
+There are seven manual jobs: `create_tables`, `publish_ingestion_demo`, `generate_sessions`, `ingest_ocpp_files`, `combined_ingestion`, `evaluate_generated_batch` and `run_generated_pipeline`. The last one runs generation, ingestion and evaluation in order with one command. It picks a new batch name and defaults to two sessions with seed `42`; you can change the count, seed and candidate mode. It adds no tables. Each job stops when its work finishes.
 
 - [Original MVP brief](OVERVIEW.pdf) — the business problem and target scope.
 - [Full runbook](02-runbook.md) — table rules, field definitions, limitations and remaining work.

@@ -1,8 +1,11 @@
 """Check bundle wiring; Databricks runs establish runtime failure behavior."""
 
+import json
 from pathlib import Path
 import re
 import unittest
+
+from notebooks import session_generator as generator
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -24,6 +27,9 @@ class GeneratedWorkflowTests(unittest.TestCase):
                 self.assertNotIn(name, self.jobs, "Job resources must have unique keys")
                 self.jobs[name] = job
         self.parent = self.jobs["run_generated_pipeline"]
+        self.defaults = dict(re.findall(
+            r'(?m)^        - name: (\w+)\n          default: "?([^"\n]+)"?$', self.parent,
+        ))
         task_pairs = re.findall(
             r"(?ms)^        - task_key: (\w+)\n(.*?)(?=^        - task_key: |\Z)",
             self.parent,
@@ -33,11 +39,8 @@ class GeneratedWorkflowTests(unittest.TestCase):
 
     def test_manual_workflow_has_defaults_and_serializes_each_job(self):
         self.assertIn("      name: chargeassert_dev_run_generated_pipeline\n", self.parent)
-        defaults = dict(re.findall(
-            r'(?m)^        - name: (\w+)\n          default: "?([^"\n]+)"?$', self.parent,
-        ))
-        self.assertEqual(defaults, {
-            "batch_id": "sessions-pipeline-001", "session_count": "2",
+        self.assertEqual(self.defaults, {
+            "batch_id": "sessions-{{job.run_id}}", "session_count": "2",
             "seed": "42", "candidate_mode": "healthy",
         })
         for name in ("run_generated_pipeline", *CHILDREN):
@@ -45,6 +48,38 @@ class GeneratedWorkflowTests(unittest.TestCase):
                 job = self.jobs[name]
                 self.assertEqual(re.findall(r"(?m)^      max_concurrent_runs: (.+)$", job), ["1"])
                 self.assertNotRegex(job, r"(?m)^      (?:schedule|trigger|continuous):")
+
+    def test_automatic_batch_names_fit_generator_and_separate_sessions(self):
+        session_ids = []
+        for run_id in (1, 2**63 - 1):
+            with self.subTest(run_id=run_id):
+                # Check the producer contract after resolution; Databricks must
+                # still establish runtime resolution of the job parameter.
+                batch_id = self.defaults["batch_id"].replace("{{job.run_id}}", str(run_id))
+                content = generator.generate_batch(
+                    batch_id, int(self.defaults["session_count"]), int(self.defaults["seed"]),
+                )
+                rows = [json.loads(line) for line in content.splitlines()]
+                identities = {json.loads(row["payload"])["transactionInfo"]["transactionId"]
+                              for row in rows}
+                self.assertLessEqual(len(batch_id), 32)
+                self.assertEqual(len(identities), 2)
+                self.assertEqual({row["generator"]["batch_id"] for row in rows}, {batch_id})
+                session_ids.append(identities)
+        self.assertEqual(len(session_ids), 2)
+        self.assertTrue(session_ids[0].isdisjoint(session_ids[1]))
+
+    def test_named_batch_and_count_override_keep_repeatable_inputs(self):
+        parameters = {**self.defaults, "batch_id": "sessions-replay-001", "session_count": "5"}
+        arguments = (parameters["batch_id"], int(parameters["session_count"]), int(parameters["seed"]))
+        content = generator.generate_batch(*arguments)
+        self.assertEqual(content, generator.generate_batch(*arguments))
+        rows = [json.loads(line) for line in content.splitlines()]
+        identities = {json.loads(row["payload"])["transactionInfo"]["transactionId"]
+                      for row in rows}
+        self.assertEqual(len(identities), 5)
+        self.assertEqual({row["generator"]["seed"] for row in rows}, {42})
+        self.assertEqual({row["generator"]["batch_id"] for row in rows}, {"sessions-replay-001"})
 
     def test_direct_child_jobs_run_in_order_only_after_success(self):
         for index, name in enumerate(CHILDREN):

@@ -340,13 +340,23 @@ For the short test guide, simple Gold query and recorded result, see [Generated 
 
 `run_generated_pipeline` is the parent job for the full flow. It calls `generate_sessions`, then `ingest_ocpp_files`, then `evaluate_generated_batch`, using [Run Job tasks](https://docs.databricks.com/aws/en/jobs/tasks/run-job). Both downstream steps require `ALL_SUCCESS`. It forwards `batch_id`, `session_count` and `seed` to generation, and the same `batch_id` plus `candidate_mode` to evaluation. It reuses the existing child jobs and their concurrency limits; it does not start a second checkpoint writer.
 
-Its defaults are `batch_id=sessions-pipeline-001`, `session_count=2`, `seed=42` and `candidate_mode=healthy`. It allows one parent run at a time and has no schedule. Avoid overlapping it with other publishing or ingestion commands: a busy child job can be skipped, and job limits do not coordinate manual writers.
+Its defaults are `batch_id=sessions-{{job.run_id}}`, `session_count=2`, `seed=42` and `candidate_mode=healthy`. Databricks fills in the parent run ID using a [dynamic job parameter](https://docs.databricks.com/aws/en/jobs/dynamic-value-references). Generation and evaluation receive that same name. Each new full run gets new session IDs; the seed keeps the usage values repeatable. You can find the batch name in the parent run's parameters.
+
+After deployment, the shortest command with an explicit billing mode is:
+
+```bash
+databricks bundle run -t dev run_generated_pipeline --params candidate_mode=healthy
+```
+
+Use `candidate_mode=amount_error` to test bad bills. Add `,session_count=10` to create ten sessions, or `,seed=123` for different usage values. Session counts must be 1-1,000; seeds must be 0-4,294,967,295. Omitted values keep their defaults, including `healthy` if no mode is supplied.
+
+To reuse a batch, set `batch_id` explicitly and keep its count and seed unchanged. Otherwise, repeating the command creates a new batch. The parent allows one run at a time and has no schedule. Avoid overlapping it with other publishing or ingestion commands: a busy child job can be skipped, and job limits do not coordinate manual writers.
 
 The evaluator keeps its own execution identity. Open the parent's evaluation task, then the child run and its notebook output, to find the saved `execution_id`. Check the parent completed successfully before using that child's Gold result. A failure before evaluation creates no new evaluator receipt or snapshot; an older PASS cannot stand in for it. Start a new complete run after resolving a failure. The new parent workflow still needs Databricks verification.
 
 #### Fresh batch, healthy result, deliberate error
 
-Run these commands from the updated repository after authentication. Wait for each command to succeed:
+This comparison uses an explicit batch name so all three runs check the same sessions. Choose a fresh name and use it throughout the commands and SQL below. Run from the updated repository after authentication and wait for each command to succeed:
 
 ```bash
 git switch dev
@@ -378,7 +388,7 @@ Expect 28 PASS checks under a new execution ID. The healthy session and billing 
 
 #### Read the exact generated execution
 
-The evaluator prints its `execution_id`, `run_id`, session count, assertion count and financial verdicts. You can also find the matching attempt in SQL:
+The evaluator prints its `execution_id`, `run_id`, session count, assertion count and financial verdicts. You can also find the matching attempt in SQL. For an automatically named batch, replace the name below with the batch name from the parent run parameters:
 
 ```sql
 SELECT execution_id, batch_id, candidate_mode, run_id,

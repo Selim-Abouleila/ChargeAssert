@@ -20,31 +20,47 @@ The summary should list `chargeassert_dev_run_generated_pipeline` and `chargeass
 
 ## 2. Run the whole pipeline with one command
 
-Use a fresh batch name:
+Choose the billing mode; the other settings have defaults:
 
 ```bash
-databricks bundle run -t dev run_generated_pipeline --params batch_id=sessions-pipeline-001,session_count=2,seed=42,candidate_mode=healthy
+databricks bundle run -t dev run_generated_pipeline --params candidate_mode=healthy
 ```
+
+Each new run picks a batch name such as `sessions-604035863697496` from the parent run ID. You can find it in the run's parameters. It defaults to **two sessions and seed `42`**. New batches get new session IDs; the same seed keeps their usage values repeatable.
+
+To create more sessions, add the count:
+
+```bash
+databricks bundle run -t dev run_generated_pipeline --params candidate_mode=healthy,session_count=10
+```
+
+You can also add `,seed=123` for different usage values. Counts must be 1-1,000 and seeds 0-4,294,967,295. If you omit `candidate_mode`, it defaults to `healthy`.
 
 The parent job runs three existing jobs in order:
 
-1. **Generate:** create two simulated charging sessions. `seed=42` makes the data repeatable.
-2. **Ingest:** Auto Loader loads their six events into Bronze.
+1. **Generate:** create the requested number of simulated charging sessions.
+2. **Ingest:** Auto Loader loads their events into Bronze (three per session).
 3. **Evaluate:** calculate the expected charges, compare both mock billing versions and save the results in Gold.
 
-Each step waits for the previous one to succeed. Expect **28 PASS checks**: two sessions × two billing versions × seven checks. Baseline, candidate and overall should all be PASS.
+Each step waits for the previous one to succeed. With the default two sessions, expect **28 PASS checks**: two sessions × two billing versions × seven checks. With ten sessions, expect 140. Baseline, candidate and overall should all be PASS.
 
 The workflow is defined in [generated_billing.yml](../resources/generated_billing.yml). Databricks manages the order and shows all three steps in one parent run. The existing ingestion job keeps ownership of its checkpoint.
 
-**Check that bad billing gets caught.** Reuse the same batch with a deliberate EUR 0.87 added to each candidate bill:
+**Check that bad billing gets caught.** Create a new batch with a deliberate EUR 0.87 added to each candidate bill:
 
 ```bash
-databricks bundle run -t dev run_generated_pipeline --params batch_id=sessions-pipeline-001,session_count=2,seed=42,candidate_mode=amount_error
+databricks bundle run -t dev run_generated_pipeline --params candidate_mode=amount_error
 ```
 
 Expect **26 PASS and 2 FAIL checks**. Baseline stays PASS; candidate and overall become FAIL. The job itself should succeed because it detected and saved the billing errors.
 
-Run the healthy command again to check repeat runs. Expect 28 PASS checks and a new evaluator execution ID, with no extra session records and the earlier results preserved.
+**Reuse the same sessions.** Set a batch name explicitly, then repeat that command with the same count and seed:
+
+```bash
+databricks bundle run -t dev run_generated_pipeline --params batch_id=sessions-repeat-001,candidate_mode=healthy
+```
+
+With these defaults, expect 28 PASS checks and a new evaluator execution ID each time, with no extra session records and earlier results preserved. Change only `candidate_mode` to `amount_error` to compare bad billing on those same sessions. Without an explicit batch name, every new full run creates new sessions.
 
 The separate commands still work. `combined_ingestion` creates and loads a batch without evaluating it. Use `evaluate_generated_batch` directly when you only want to check bills for a batch already loaded.
 
@@ -60,7 +76,7 @@ ORDER BY captured_at DESC
 LIMIT 10;
 ```
 
-For a parent run, open its `evaluate_generated_batch` task, follow the child run and read the `evaluate_batch` notebook output. Use the `execution_id` printed there; it belongs to the evaluator, not the parent run. Both modes should show **2 sessions and 28 checks**; their verdicts differ as described above.
+For a parent run, open its `evaluate_generated_batch` task, follow the child run and read the `evaluate_batch` notebook output. Use the `execution_id` printed there; it belongs to the evaluator, not the parent run. With the default count, both modes should show **2 sessions and 28 checks**; their verdicts differ as described above. A custom count produces 14 checks per session.
 
 This query shows saved billing results. To also confirm that the matching job completed successfully, use [the exact-execution check](../sql/15_check_generated_billing.sql).
 

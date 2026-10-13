@@ -154,23 +154,25 @@ The [ingestion walkthrough](docs/02-runbook.md#incremental-ocpp-file-ingestion) 
 
 The [generated-session guide](docs/03-generated-sessions.md) covers this path from start to finish, including a simple Gold query.
 
-After deployment, use a fresh batch name. Keep earlier files, results and checkpoints unchanged.
+After deployment, run the whole pipeline. It picks a new batch name automatically and defaults to two sessions with seed `42`:
 
 ```bash
-databricks bundle run -t dev run_generated_pipeline --params batch_id=sessions-pipeline-001,session_count=2,seed=42,candidate_mode=healthy
+databricks bundle run -t dev run_generated_pipeline --params candidate_mode=healthy
 ```
 
 This parent job creates two simulated sessions, loads their six events with Auto Loader and checks both mock billing versions through Silver and Gold. Each step waits for the previous one to succeed. `seed=42` makes the data repeatable. Expect **28 PASS checks**.
 
-Then test whether it catches bad billing on the same sessions:
+To test whether it catches bad billing, create another batch with deliberately wrong candidate bills:
 
 ```bash
-databricks bundle run -t dev run_generated_pipeline --params batch_id=sessions-pipeline-001,session_count=2,seed=42,candidate_mode=amount_error
+databricks bundle run -t dev run_generated_pipeline --params candidate_mode=amount_error
 ```
 
 This adds EUR 0.87 to each candidate bill. Expect **26 PASS and 2 FAIL checks**: baseline PASS, candidate FAIL and overall FAIL. The job itself should succeed because it detected and saved the errors.
 
-Open the parent run's `evaluate_generated_batch` child job and use the `execution_id` from its notebook output with [the generated execution check](sql/15_check_generated_billing.sql). Repeating the healthy command should save another result without adding session records. Each command runs once and stops.
+Add `,session_count=10` to create ten sessions, or `,seed=123` to change the usage values. Each new run creates new session IDs and stops when finished. To check the same sessions again, use an explicit `batch_id`; the [guide](docs/03-generated-sessions.md) shows how.
+
+Open the parent run's `evaluate_generated_batch` child job and use the `execution_id` from its notebook output with [the generated execution check](sql/15_check_generated_billing.sql).
 
 ## Local tests
 
@@ -178,7 +180,7 @@ Open the parent run's `evaluate_generated_batch` child job and use the `executio
 python -B -m unittest discover -s tests -q
 ```
 
-**220 local tests pass.** They cover generation, validation, billing, verdicts, session coverage and saved results. Some use substitutes for Databricks and Spark, so workspace checks are still needed for deployment, repeat runs and recovery.
+**222 local tests pass.** They cover generation, validation, billing, verdicts, session coverage and saved results. Some use substitutes for Databricks and Spark, so workspace checks are still needed for deployment, repeat runs and recovery.
 
 ## Current status and next steps
 
