@@ -11,7 +11,9 @@ def run(spark, dbutils):
         if not value:
             raise ValueError(f'Missing generated billing parameter: {name}')
         parameters[name] = value
-    evaluate(spark, **parameters)
+    result = evaluate(spark, **parameters)
+    # Refresh the saved attempt, including when its billing verdict is FAIL.
+    dbutils.jobs.taskValues.set(key="execution_id", value=result["execution_id"])
 
 
 if __name__ == '__main__':

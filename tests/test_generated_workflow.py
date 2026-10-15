@@ -4,6 +4,9 @@ import json
 from pathlib import Path
 import re
 import unittest
+from unittest.mock import Mock, patch
+
+from notebooks import evaluate_generated_batch as evaluator_notebook
 
 from notebooks import session_generator as generator
 
@@ -108,6 +111,42 @@ class GeneratedWorkflowTests(unittest.TestCase):
                 forwarded = dict(re.findall(r'(?m)^              (\w+): "(.+)"$', task))
                 self.assertEqual(forwarded, {name: "{{job.parameters." + name + "}}" for name in names})
         self.assertNotIn("job_parameters:", self.tasks["ingest_ocpp_files"])
+
+    def test_dashboard_refresh_uses_saved_attempt_and_preserves_processing_failure(self):
+        evaluator = self.jobs["evaluate_generated_batch"]
+        tasks = dict(re.findall(
+            r"(?ms)^        - task_key: (\w+)\n(.*?)(?=^        - task_key: |\Z)", evaluator,
+        ))
+        self.assertEqual(list(tasks), ["evaluate_batch", "refresh_dashboard"])
+        refresh = tasks["refresh_dashboard"]
+        self.assertEqual(re.findall(r"(?m)^            - task_key: (\w+)$", refresh), ["evaluate_batch"])
+        self.assertIn("          run_if: ALL_SUCCESS\n", refresh)
+        self.assertIn("            dashboard_id: ${resources.dashboards.generated_billing.id}\n", refresh)
+        self.assertIn('              "filters~execution_id": "{{tasks.evaluate_batch.values.execution_id}}"', refresh)
+        self.assertNotIn("{{job.repair_count}}", refresh)
+
+    def test_evaluation_publishes_actual_execution_id_for_both_billing_outcomes(self):
+        arguments = dict(catalog_name="workspace", batch_id="batch", candidate_mode="amount_error",
+                         job_id="7", job_run_id="100", repair_count="0")
+        for verdict in ("PASS", "FAIL"):
+            with self.subTest(verdict=verdict):
+                dbutils = Mock()
+                dbutils.widgets.get.side_effect = arguments.__getitem__
+                evaluate = Mock(return_value={"execution_id": "7:100:0", "verdict": verdict})
+                spark = object()
+                with patch.dict("sys.modules", {"generated_pipeline": Mock(evaluate=evaluate)}):
+                    evaluator_notebook.run(spark, dbutils)
+                evaluate.assert_called_once_with(spark, **arguments)
+                dbutils.jobs.taskValues.set.assert_called_once_with(key="execution_id", value="7:100:0")
+
+    def test_processing_failure_does_not_publish_a_dashboard_execution(self):
+        dbutils = Mock()
+        dbutils.widgets.get.return_value = "configured"
+        evaluate = Mock(side_effect=RuntimeError("source validation failed"))
+        with patch.dict("sys.modules", {"generated_pipeline": Mock(evaluate=evaluate)}):
+            with self.assertRaisesRegex(RuntimeError, "source validation failed"):
+                evaluator_notebook.run(object(), dbutils)
+        dbutils.jobs.taskValues.set.assert_not_called()
 
     def test_children_keep_notebooks_checkpoint_and_evaluation_identity(self):
         ownership = {

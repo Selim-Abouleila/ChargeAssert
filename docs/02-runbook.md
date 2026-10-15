@@ -336,7 +336,7 @@ The `evaluate_generated_batch` job completes the path from landed events to bill
 
 Its two job parameters are `batch_id` (default `sessions-repaired-001`) and `candidate_mode` (`healthy` by default, or `amount_error`). It allows one run at a time and stops when the batch is finished. It does not schedule more work or modify the source files, landing rows or Auto Loader checkpoint.
 
-For the short test guide, simple Gold query and recorded result, see [Generated sessions](03-generated-sessions.md).
+For the short test guide, simple Gold query and recorded result, see [Generated sessions](03-generated-sessions.md). To run and inspect results through the Databricks UI, use the [dashboard guide](04-dashboard.md). The bundle publishes the dashboard and adds an `ALL_SUCCESS` refresh task to the evaluator. It reads the exact saved execution ID from the evaluation task value. A billing FAIL still refreshes; an evaluation processing error skips refresh and keeps the job failed. Refresh the dashboard manually to inspect those failed attempts. Dashboard status covers that evaluation; the parent job remains the source for generation and ingestion failures.
 
 `run_generated_pipeline` is the parent job for the full flow. It calls `generate_sessions`, then `ingest_ocpp_files`, then `evaluate_generated_batch`, using [Run Job tasks](https://docs.databricks.com/aws/en/jobs/tasks/run-job). Both downstream steps require `ALL_SUCCESS`. It forwards `batch_id`, `session_count` and `seed` to generation, and the same `batch_id` plus `candidate_mode` to evaluation. It reuses the existing child jobs and their concurrency limits; it does not start a second checkpoint writer.
 
@@ -552,7 +552,7 @@ Earlier completed snapshots with five scenarios can still be read by their exact
 
 Gold turns the billing comparisons into findings a business team can act on. An amount mismatch can flag a potential customer overcharge. A missing billing record can flag a potentially unbilled session. The results show what failed and keep the evidence needed to investigate it and review a release.
 
-Gold stores the detailed checks, current scenario verdicts and saved execution snapshots that the pipeline does not overwrite. It supports a human release decision today. The automated GitHub release check and a dashboard are future work; Gold does not yet report total customer overbilling or operator revenue loss.
+Gold stores the detailed checks, current scenario verdicts and saved execution snapshots that the pipeline does not overwrite. It supports a human release decision today. The generated results now have a bundle-managed [dashboard](04-dashboard.md). The automated GitHub release check remains future work; Gold does not yet report total customer overbilling or operator revenue loss.
 
 | Table | Status | One row represents | Important fields |
 | --- | --- | --- | --- |

@@ -152,7 +152,7 @@ The [ingestion walkthrough](docs/02-runbook.md#incremental-ocpp-file-ingestion) 
 
 ## Generate sessions and check their bills
 
-The [generated-session guide](docs/03-generated-sessions.md) covers this path from start to finish, including a simple Gold query.
+The [generated-session guide](docs/03-generated-sessions.md) covers this path from start to finish. Deployment also creates a [results dashboard](docs/04-dashboard.md): use the job's **Run now** button, then read the refreshed billing results without writing SQL.
 
 After deployment, run the whole pipeline with its defaults: **100 simulated sessions**, seed `42` and deliberately incorrect candidate bills. It picks a new batch name automatically:
 
@@ -178,7 +178,7 @@ Open the parent run's `evaluate_generated_batch` child job and use the `executio
 python -B -m unittest discover -s tests -q
 ```
 
-**222 local tests pass.** They cover generation, validation, billing, verdicts, session coverage and saved results. Some use substitutes for Databricks and Spark, so workspace checks are still needed for deployment, repeat runs and recovery.
+**241 local tests pass.** They cover generation, validation, billing, verdicts, session coverage, saved results and dashboard queries and wiring. Some use substitutes for Databricks and Spark, so workspace checks are still needed for deployment, repeat runs and recovery.
 
 ## Current status and next steps
 
@@ -186,7 +186,7 @@ This is a working portfolio MVP using simulated data and a flat energy rate. It 
 
 **Confirmed in Databricks:** the original correct/wrong-amount examples, an execution with seven saved test results, and a generated Gold result with **2 sessions, 28 checks and all verdicts PASS**. The [generated-session guide](docs/03-generated-sessions.md#confirmed-result) records that result.
 
-**Still to check:** the new parent workflow, the generated job's completion record, its deliberate-error test, stable repeat runs, recovery after interruption and the original missing-bill results.
+**Still to check:** the dashboard deployment and refresh, the new parent workflow, the generated job's completion record, its deliberate-error test, stable repeat runs, recovery after interruption and the original missing-bill results.
 
 Next steps are to finish those checks, support more incoming data and billing cases, test real releases, and add GitHub release checks. Runtime, cost and throughput measurements are also planned. The [remaining-work list](docs/02-runbook.md#remaining-mvp-work) tracks the details.
 
@@ -198,7 +198,8 @@ Next steps are to finish those checks, support more incoming data and billing ca
 | [Table guide](docs/01-tables.md) | What each table does and why it matters. |
 | [Runbook](docs/02-runbook.md) | Setup, data rules, verification and remaining work. |
 | [Generated-session guide](docs/03-generated-sessions.md) | Commands, expected results and a simple Gold query. |
-| [databricks.yml](databricks.yml) and [resources/](resources/) | Bundle configuration, schemas, Volume and jobs. |
+| [Dashboard guide](docs/04-dashboard.md) | Run simulations and inspect bills through the Databricks UI. |
+| [databricks.yml](databricks.yml) and [resources/](resources/) | Bundle configuration, schemas, Volume, jobs and dashboard. |
 | [sql/](sql/) | Table definitions, billing calculations and checks. |
 | [notebooks/](notebooks/) | Session generation, mock billing, ingestion and execution tracking. |
 | [data/ingestion_demo/](data/ingestion_demo/) | Sample files for the ingestion demo. |

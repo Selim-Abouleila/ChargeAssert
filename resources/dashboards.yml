@@ -1,0 +1,9 @@
+resources:
+  dashboards:
+    generated_billing:
+      display_name: ChargeAssert - Generated billing results (dev)
+      file_path: ../dashboards/generated_billing.lvdash.json
+      warehouse_id: ${var.warehouse_id}
+      dataset_catalog: ${var.catalog_name}
+      dataset_schema: ${resources.schemas.gold.name}
+      embed_credentials: false

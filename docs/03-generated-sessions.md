@@ -16,7 +16,7 @@ databricks bundle deploy -t dev
 databricks bundle summary -t dev
 ```
 
-The summary should list `chargeassert_dev_run_generated_pipeline` and `chargeassert_dev_evaluate_generated_batch` with job URLs.
+The summary should list `chargeassert_dev_run_generated_pipeline`, `chargeassert_dev_evaluate_generated_batch` and the **ChargeAssert - Generated billing results (dev)** dashboard with URLs. The dashboard is published automatically; no UI setup is needed.
 
 ## 2. Run the whole pipeline with one command
 
@@ -64,7 +64,11 @@ With this explicit two-session setting, expect 28 PASS checks and a new evaluato
 
 The separate commands still work. `combined_ingestion` creates and loads a batch without evaluating it. Use `evaluate_generated_batch` directly when you only want to check bills for a batch already loaded.
 
-## 3. Read the Gold results
+## 3. Read the results
+
+For normal runs, you can use **Jobs & Pipelines → chargeassert_dev_run_generated_pipeline → Run now**. Its evaluator refreshes the results dashboard after checking the bills. Open **ChargeAssert - Generated billing results (dev)** to inspect the summary and session bills. The [dashboard guide](04-dashboard.md) explains the execution selector and what each status means.
+
+The SQL below remains available for direct checks.
 
 The evaluation job creates `generated_execution_verdict` when it starts. After it finishes, run this in the Databricks SQL editor:
 

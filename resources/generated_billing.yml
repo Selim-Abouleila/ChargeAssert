@@ -21,6 +21,17 @@ resources:
               job_run_id: "{{job.run_id}}"
               repair_count: "{{job.repair_count}}"
 
+        - task_key: refresh_dashboard
+          depends_on:
+            - task_key: evaluate_batch
+          # Billing FAIL still completes evaluation; processing errors skip refresh.
+          run_if: ALL_SUCCESS
+          dashboard_task:
+            dashboard_id: ${resources.dashboards.generated_billing.id}
+            warehouse_id: ${var.warehouse_id}
+            filters:
+              "filters~execution_id": "{{tasks.evaluate_batch.values.execution_id}}"
+
     run_generated_pipeline:
       name: chargeassert_dev_run_generated_pipeline
       description: Generate one batch, load its events and check its bills through Gold.

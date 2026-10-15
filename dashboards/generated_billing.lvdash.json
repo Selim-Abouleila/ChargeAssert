@@ -1,0 +1,1174 @@
+{
+  "datasets": [
+    {
+      "name": "execution_choices",
+      "displayName": "Available evaluations",
+      "queryLines": [
+        "-- The default includes the latest attempt even when it failed or is still running.\n",
+        "SELECT 'latest' AS execution_id\n",
+        "UNION\n",
+        "SELECT execution_id FROM chargeassert_dev_bronze.generated_job_execution;\n"
+      ]
+    },
+    {
+      "name": "execution_summary",
+      "displayName": "Selected evaluation",
+      "queryLines": [
+        "-- Blank or 'latest' :execution_id selects the latest evaluator attempt, including failures.\n",
+        "-- Results belong to that evaluator only; they do not report parent job status.\n",
+        "WITH requested AS (\n",
+        "  SELECT COALESCE(NULLIF(NULLIF(TRIM(:execution_id), ''), 'latest'),\n",
+        "    (SELECT execution_id\n",
+        "     FROM chargeassert_dev_bronze.generated_job_execution\n",
+        "     ORDER BY started_at DESC, execution_id DESC LIMIT 1)) AS execution_id\n",
+        "), receipts AS (\n",
+        "  SELECT e.execution_id, COUNT(*) AS receipt_rows,\n",
+        "    MAX(e.batch_id) AS batch_id, MAX(e.candidate_mode) AS candidate_mode,\n",
+        "    MAX(e.started_at) AS started_at, MAX(e.finished_at) AS finished_at,\n",
+        "    MAX(e.status) AS evaluation_status, MAX(e.reason) AS evaluation_reason,\n",
+        "    MAX(e.run_id) AS run_id, MAX(e.pipeline_hash) AS pipeline_hash\n",
+        "  FROM chargeassert_dev_bronze.generated_job_execution e\n",
+        "  JOIN requested q ON q.execution_id = e.execution_id\n",
+        "  GROUP BY e.execution_id\n",
+        "), snapshots AS (\n",
+        "  SELECT v.execution_id, COUNT(*) AS snapshot_rows,\n",
+        "    MAX(v.run_id) AS run_id, MAX(v.pipeline_hash) AS pipeline_hash,\n",
+        "    MAX(v.session_count) AS session_count, MAX(v.assertion_count) AS assertion_count,\n",
+        "    MAX(v.baseline_verdict) AS baseline_verdict, MAX(v.candidate_verdict) AS candidate_verdict,\n",
+        "    MAX(v.verdict) AS verdict, MAX(v.assertions_snapshot) AS assertions_snapshot,\n",
+        "    MAX(v.captured_at) AS captured_at\n",
+        "  FROM chargeassert_dev_gold.generated_execution_verdict v\n",
+        "  JOIN requested q ON q.execution_id = v.execution_id\n",
+        "  GROUP BY v.execution_id\n",
+        "), context AS (\n",
+        "  SELECT q.execution_id, e.batch_id, e.candidate_mode, e.started_at, e.finished_at,\n",
+        "    COALESCE(e.evaluation_status, 'MISSING') AS evaluation_status, e.evaluation_reason,\n",
+        "    e.receipt_rows, e.run_id, v.snapshot_rows, v.session_count, v.assertion_count,\n",
+        "    v.baseline_verdict, v.candidate_verdict, v.verdict, v.captured_at, v.assertions_snapshot,\n",
+        "    COALESCE(e.receipt_rows = 1 AND e.evaluation_status = 'SUCCEEDED'\n",
+        "      AND v.snapshot_rows = 1 AND e.run_id = v.run_id AND e.pipeline_hash = v.pipeline_hash\n",
+        "      AND v.session_count > 0 AND v.assertion_count = 14 * v.session_count, FALSE) AS receipt_usable\n",
+        "  FROM requested q\n",
+        "  LEFT JOIN receipts e ON e.execution_id = q.execution_id\n",
+        "  LEFT JOIN snapshots v ON v.execution_id = q.execution_id\n",
+        "), parsed_assertions AS (\n",
+        "  SELECT c.execution_id, explode(from_json(\n",
+        "    CASE WHEN c.receipt_usable THEN c.assertions_snapshot ELSE '[]' END,\n",
+        "    'ARRAY<STRUCT<run_id:STRING,session_id:STRING,release_role:STRING,assertion_id:STRING,status:STRING,expected_value:STRING,actual_value:STRING,difference:STRING>>')) AS a\n",
+        "  FROM context c\n",
+        "), assertions AS (\n",
+        "  SELECT execution_id, a.run_id AS run_id, a.session_id AS session_id,\n",
+        "    a.release_role AS release_role, a.assertion_id AS assertion_id, a.status AS status,\n",
+        "    a.expected_value AS expected_value, a.actual_value AS actual_value, a.difference AS difference\n",
+        "  FROM parsed_assertions\n",
+        "), session_results AS (\n",
+        "  SELECT a.execution_id, a.session_id, a.release_role,\n",
+        "    SUM(CASE WHEN a.status = 'PASS' THEN 1 ELSE 0 END) AS passed_checks,\n",
+        "    SUM(CASE WHEN a.status = 'FAIL' THEN 1 ELSE 0 END) AS failed_checks,\n",
+        "    SUM(CASE WHEN a.status = 'BLOCKED' THEN 1 ELSE 0 END) AS blocked_checks,\n",
+        "    COUNT(*) AS assertion_rows,\n",
+        "    CASE WHEN COUNT(*) = 7 AND COUNT(DISTINCT a.assertion_id) = 7\n",
+        "      AND MIN(CASE WHEN a.run_id = c.run_id AND COALESCE(a.session_id, '') <> ''\n",
+        "        AND a.release_role IN ('baseline', 'candidate')\n",
+        "        AND a.assertion_id IN ('oracle_available', 'final_cdr_count', 'energy_match',\n",
+        "          'duration_match', 'amount_match', 'currency_match', 'tariff_match')\n",
+        "        AND a.status IN ('PASS', 'FAIL', 'BLOCKED') THEN 1 ELSE 0 END) = 1\n",
+        "      THEN 1 ELSE 0 END AS coverage_valid,\n",
+        "    MAX(CASE WHEN a.assertion_id = 'currency_match' THEN a.expected_value END) AS currency,\n",
+        "    MAX(CASE WHEN a.assertion_id = 'amount_match' THEN a.expected_value END) AS expected_amount,\n",
+        "    MAX(CASE WHEN a.assertion_id = 'amount_match' THEN a.actual_value END) AS actual_amount,\n",
+        "    MAX(CASE WHEN a.assertion_id = 'amount_match' THEN a.difference END) AS difference,\n",
+        "    MAX(CASE WHEN a.assertion_id = 'amount_match' THEN a.status END) AS amount_status\n",
+        "  FROM assertions a JOIN context c ON c.execution_id = a.execution_id\n",
+        "  GROUP BY a.execution_id, a.session_id, a.release_role\n",
+        "), totals AS (\n",
+        "  SELECT execution_id, COUNT(*) AS session_release_rows,\n",
+        "    COUNT(DISTINCT session_id) AS observed_sessions, MIN(coverage_valid) AS coverage_valid,\n",
+        "    SUM(assertion_rows) AS observed_assertions, SUM(passed_checks) AS passed_checks,\n",
+        "    SUM(failed_checks) AS failed_checks, SUM(blocked_checks) AS blocked_checks,\n",
+        "    CASE WHEN MIN(CASE WHEN release_role = 'baseline' AND passed_checks <> 7 THEN 0 ELSE 1 END) = 1\n",
+        "      THEN 'PASS' ELSE 'FAIL' END AS baseline_verdict,\n",
+        "    CASE WHEN MIN(CASE WHEN release_role = 'candidate' AND passed_checks <> 7 THEN 0 ELSE 1 END) = 1\n",
+        "      THEN 'PASS' ELSE 'FAIL' END AS candidate_verdict,\n",
+        "    CASE WHEN MIN(passed_checks) = 7 THEN 'PASS' ELSE 'FAIL' END AS verdict\n",
+        "  FROM session_results GROUP BY execution_id\n",
+        "), checked AS (\n",
+        "  SELECT c.*, t.passed_checks, t.failed_checks, t.blocked_checks,\n",
+        "    COALESCE(c.receipt_usable AND t.coverage_valid = 1\n",
+        "      AND t.session_release_rows = 2 * c.session_count AND t.observed_sessions = c.session_count\n",
+        "      AND t.observed_assertions = c.assertion_count\n",
+        "      AND t.baseline_verdict = c.baseline_verdict AND t.candidate_verdict = c.candidate_verdict\n",
+        "      AND t.verdict = c.verdict, FALSE) AS usable\n",
+        "  FROM context c LEFT JOIN totals t ON t.execution_id = c.execution_id\n",
+        ")\n",
+        "SELECT execution_id, batch_id, candidate_mode, started_at, finished_at, evaluation_status,\n",
+        "  CASE WHEN receipt_rows IS NULL THEN 'No evaluator receipt exists for this selection.'\n",
+        "       WHEN receipt_rows <> 1 THEN 'Duplicate evaluator receipts: results cannot be trusted.'\n",
+        "       WHEN evaluation_status <> 'SUCCEEDED' THEN evaluation_reason\n",
+        "       WHEN NOT usable THEN 'Saved evidence is missing, duplicated or inconsistent; billing results are blocked.'\n",
+        "       ELSE evaluation_reason END AS reason,\n",
+        "  usable, captured_at,\n",
+        "  CASE WHEN usable THEN session_count END AS session_count,\n",
+        "  CASE WHEN usable THEN assertion_count END AS assertion_count,\n",
+        "  CASE WHEN usable THEN passed_checks END AS passed_checks,\n",
+        "  CASE WHEN usable THEN failed_checks END AS failed_checks,\n",
+        "  CASE WHEN usable THEN blocked_checks END AS blocked_checks,\n",
+        "  CASE WHEN usable THEN baseline_verdict ELSE 'BLOCKED' END AS baseline_verdict,\n",
+        "  CASE WHEN usable THEN candidate_verdict ELSE 'BLOCKED' END AS candidate_verdict,\n",
+        "  CASE WHEN usable THEN verdict ELSE 'BLOCKED' END AS verdict\n",
+        "FROM checked;\n"
+      ],
+      "parameters": [
+        {
+          "keyword": "execution_id",
+          "displayName": "Evaluation",
+          "dataType": "STRING",
+          "defaultSelection": {
+            "values": {
+              "dataType": "STRING",
+              "values": [
+                {
+                  "value": "latest"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "session_bills",
+      "displayName": "Saved session bills",
+      "queryLines": [
+        "-- Blank or 'latest' :execution_id selects the latest evaluator attempt, including failures.\n",
+        "-- Results belong to that evaluator only; they do not report parent job status.\n",
+        "WITH requested AS (\n",
+        "  SELECT COALESCE(NULLIF(NULLIF(TRIM(:execution_id), ''), 'latest'),\n",
+        "    (SELECT execution_id\n",
+        "     FROM chargeassert_dev_bronze.generated_job_execution\n",
+        "     ORDER BY started_at DESC, execution_id DESC LIMIT 1)) AS execution_id\n",
+        "), receipts AS (\n",
+        "  SELECT e.execution_id, COUNT(*) AS receipt_rows,\n",
+        "    MAX(e.batch_id) AS batch_id, MAX(e.candidate_mode) AS candidate_mode,\n",
+        "    MAX(e.started_at) AS started_at, MAX(e.finished_at) AS finished_at,\n",
+        "    MAX(e.status) AS evaluation_status, MAX(e.reason) AS evaluation_reason,\n",
+        "    MAX(e.run_id) AS run_id, MAX(e.pipeline_hash) AS pipeline_hash\n",
+        "  FROM chargeassert_dev_bronze.generated_job_execution e\n",
+        "  JOIN requested q ON q.execution_id = e.execution_id\n",
+        "  GROUP BY e.execution_id\n",
+        "), snapshots AS (\n",
+        "  SELECT v.execution_id, COUNT(*) AS snapshot_rows,\n",
+        "    MAX(v.run_id) AS run_id, MAX(v.pipeline_hash) AS pipeline_hash,\n",
+        "    MAX(v.session_count) AS session_count, MAX(v.assertion_count) AS assertion_count,\n",
+        "    MAX(v.baseline_verdict) AS baseline_verdict, MAX(v.candidate_verdict) AS candidate_verdict,\n",
+        "    MAX(v.verdict) AS verdict, MAX(v.assertions_snapshot) AS assertions_snapshot,\n",
+        "    MAX(v.captured_at) AS captured_at\n",
+        "  FROM chargeassert_dev_gold.generated_execution_verdict v\n",
+        "  JOIN requested q ON q.execution_id = v.execution_id\n",
+        "  GROUP BY v.execution_id\n",
+        "), context AS (\n",
+        "  SELECT q.execution_id, e.batch_id, e.candidate_mode, e.started_at, e.finished_at,\n",
+        "    COALESCE(e.evaluation_status, 'MISSING') AS evaluation_status, e.evaluation_reason,\n",
+        "    e.receipt_rows, e.run_id, v.snapshot_rows, v.session_count, v.assertion_count,\n",
+        "    v.baseline_verdict, v.candidate_verdict, v.verdict, v.captured_at, v.assertions_snapshot,\n",
+        "    COALESCE(e.receipt_rows = 1 AND e.evaluation_status = 'SUCCEEDED'\n",
+        "      AND v.snapshot_rows = 1 AND e.run_id = v.run_id AND e.pipeline_hash = v.pipeline_hash\n",
+        "      AND v.session_count > 0 AND v.assertion_count = 14 * v.session_count, FALSE) AS receipt_usable\n",
+        "  FROM requested q\n",
+        "  LEFT JOIN receipts e ON e.execution_id = q.execution_id\n",
+        "  LEFT JOIN snapshots v ON v.execution_id = q.execution_id\n",
+        "), parsed_assertions AS (\n",
+        "  SELECT c.execution_id, explode(from_json(\n",
+        "    CASE WHEN c.receipt_usable THEN c.assertions_snapshot ELSE '[]' END,\n",
+        "    'ARRAY<STRUCT<run_id:STRING,session_id:STRING,release_role:STRING,assertion_id:STRING,status:STRING,expected_value:STRING,actual_value:STRING,difference:STRING>>')) AS a\n",
+        "  FROM context c\n",
+        "), assertions AS (\n",
+        "  SELECT execution_id, a.run_id AS run_id, a.session_id AS session_id,\n",
+        "    a.release_role AS release_role, a.assertion_id AS assertion_id, a.status AS status,\n",
+        "    a.expected_value AS expected_value, a.actual_value AS actual_value, a.difference AS difference\n",
+        "  FROM parsed_assertions\n",
+        "), session_results AS (\n",
+        "  SELECT a.execution_id, a.session_id, a.release_role,\n",
+        "    SUM(CASE WHEN a.status = 'PASS' THEN 1 ELSE 0 END) AS passed_checks,\n",
+        "    SUM(CASE WHEN a.status = 'FAIL' THEN 1 ELSE 0 END) AS failed_checks,\n",
+        "    SUM(CASE WHEN a.status = 'BLOCKED' THEN 1 ELSE 0 END) AS blocked_checks,\n",
+        "    COUNT(*) AS assertion_rows,\n",
+        "    CASE WHEN COUNT(*) = 7 AND COUNT(DISTINCT a.assertion_id) = 7\n",
+        "      AND MIN(CASE WHEN a.run_id = c.run_id AND COALESCE(a.session_id, '') <> ''\n",
+        "        AND a.release_role IN ('baseline', 'candidate')\n",
+        "        AND a.assertion_id IN ('oracle_available', 'final_cdr_count', 'energy_match',\n",
+        "          'duration_match', 'amount_match', 'currency_match', 'tariff_match')\n",
+        "        AND a.status IN ('PASS', 'FAIL', 'BLOCKED') THEN 1 ELSE 0 END) = 1\n",
+        "      THEN 1 ELSE 0 END AS coverage_valid,\n",
+        "    MAX(CASE WHEN a.assertion_id = 'currency_match' THEN a.expected_value END) AS currency,\n",
+        "    MAX(CASE WHEN a.assertion_id = 'amount_match' THEN a.expected_value END) AS expected_amount,\n",
+        "    MAX(CASE WHEN a.assertion_id = 'amount_match' THEN a.actual_value END) AS actual_amount,\n",
+        "    MAX(CASE WHEN a.assertion_id = 'amount_match' THEN a.difference END) AS difference,\n",
+        "    MAX(CASE WHEN a.assertion_id = 'amount_match' THEN a.status END) AS amount_status\n",
+        "  FROM assertions a JOIN context c ON c.execution_id = a.execution_id\n",
+        "  GROUP BY a.execution_id, a.session_id, a.release_role\n",
+        "), totals AS (\n",
+        "  SELECT execution_id, COUNT(*) AS session_release_rows,\n",
+        "    COUNT(DISTINCT session_id) AS observed_sessions, MIN(coverage_valid) AS coverage_valid,\n",
+        "    SUM(assertion_rows) AS observed_assertions, SUM(passed_checks) AS passed_checks,\n",
+        "    SUM(failed_checks) AS failed_checks, SUM(blocked_checks) AS blocked_checks,\n",
+        "    CASE WHEN MIN(CASE WHEN release_role = 'baseline' AND passed_checks <> 7 THEN 0 ELSE 1 END) = 1\n",
+        "      THEN 'PASS' ELSE 'FAIL' END AS baseline_verdict,\n",
+        "    CASE WHEN MIN(CASE WHEN release_role = 'candidate' AND passed_checks <> 7 THEN 0 ELSE 1 END) = 1\n",
+        "      THEN 'PASS' ELSE 'FAIL' END AS candidate_verdict,\n",
+        "    CASE WHEN MIN(passed_checks) = 7 THEN 'PASS' ELSE 'FAIL' END AS verdict\n",
+        "  FROM session_results GROUP BY execution_id\n",
+        "), checked AS (\n",
+        "  SELECT c.*, t.passed_checks, t.failed_checks, t.blocked_checks,\n",
+        "    COALESCE(c.receipt_usable AND t.coverage_valid = 1\n",
+        "      AND t.session_release_rows = 2 * c.session_count AND t.observed_sessions = c.session_count\n",
+        "      AND t.observed_assertions = c.assertion_count\n",
+        "      AND t.baseline_verdict = c.baseline_verdict AND t.candidate_verdict = c.candidate_verdict\n",
+        "      AND t.verdict = c.verdict, FALSE) AS usable\n",
+        "  FROM context c LEFT JOIN totals t ON t.execution_id = c.execution_id\n",
+        ")\n",
+        "SELECT s.execution_id, s.session_id, s.release_role, s.currency,\n",
+        "  TRY_CAST(s.expected_amount AS DECIMAL(38,6)) AS expected_amount,\n",
+        "  TRY_CAST(s.actual_amount AS DECIMAL(38,6)) AS actual_amount,\n",
+        "  TRY_CAST(s.difference AS DECIMAL(38,6)) AS difference, s.amount_status,\n",
+        "  CASE WHEN s.passed_checks = 7 THEN 'PASS' ELSE 'FAIL' END AS verdict,\n",
+        "  s.passed_checks, s.failed_checks, s.blocked_checks\n",
+        "FROM session_results s JOIN checked c ON c.execution_id = s.execution_id\n",
+        "WHERE c.usable\n",
+        "ORDER BY s.failed_checks DESC, s.blocked_checks DESC, s.session_id, s.release_role;\n"
+      ],
+      "parameters": [
+        {
+          "keyword": "execution_id",
+          "displayName": "Evaluation",
+          "dataType": "STRING",
+          "defaultSelection": {
+            "values": {
+              "dataType": "STRING",
+              "values": [
+                {
+                  "value": "latest"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "pages": [
+    {
+      "name": "overview",
+      "displayName": "Overview",
+      "pageType": "PAGE_TYPE_CANVAS",
+      "layoutVersion": "GRID_V1",
+      "layout": [
+        {
+          "widget": {
+            "name": "overview_header",
+            "multilineTextboxSpec": {
+              "lines": [
+                "## ChargeAssert | Billing checks\n\n",
+                "Catch incorrect charging bills before a billing release reaches drivers. Compare the baseline with the candidate using the same simulated sessions."
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 12,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "scope",
+            "multilineTextboxSpec": {
+              "lines": [
+                "## Read the result in context\n\n",
+                "**latest** means the latest evaluation attempt, including failed attempts. It may not be the latest pipeline run: a run can fail before evaluation starts. Check the Lakeflow job run for generation and ingestion status. A completed evaluation can correctly report billing **FAIL**."
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 2,
+            "width": 12,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "card_session_count",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "execution_summary",
+                  "fields": [
+                    {
+                      "name": "session_count",
+                      "expression": "`session_count`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "frame": {
+                "showTitle": true,
+                "title": "Charging sessions"
+              },
+              "encodings": {
+                "value": {
+                  "fieldName": "session_count",
+                  "displayName": "Charging sessions",
+                  "format": {
+                    "type": "number",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 0
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 5,
+            "width": 3,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "card_passed_checks",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "execution_summary",
+                  "fields": [
+                    {
+                      "name": "passed_checks",
+                      "expression": "`passed_checks`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "frame": {
+                "showTitle": true,
+                "title": "Checks passed"
+              },
+              "encodings": {
+                "value": {
+                  "fieldName": "passed_checks",
+                  "displayName": "Checks passed",
+                  "format": {
+                    "type": "number",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 0
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "position": {
+            "x": 3,
+            "y": 5,
+            "width": 3,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "card_failed_checks",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "execution_summary",
+                  "fields": [
+                    {
+                      "name": "failed_checks",
+                      "expression": "`failed_checks`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "frame": {
+                "showTitle": true,
+                "title": "Checks failed"
+              },
+              "encodings": {
+                "value": {
+                  "fieldName": "failed_checks",
+                  "displayName": "Checks failed",
+                  "format": {
+                    "type": "number",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 0
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "position": {
+            "x": 6,
+            "y": 5,
+            "width": 3,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "card_blocked_checks",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "execution_summary",
+                  "fields": [
+                    {
+                      "name": "blocked_checks",
+                      "expression": "`blocked_checks`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "frame": {
+                "showTitle": true,
+                "title": "Checks blocked"
+              },
+              "encodings": {
+                "value": {
+                  "fieldName": "blocked_checks",
+                  "displayName": "Checks blocked",
+                  "format": {
+                    "type": "number",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 0
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "position": {
+            "x": 9,
+            "y": 5,
+            "width": 3,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "billing_decision",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "execution_summary",
+                  "fields": [
+                    {
+                      "name": "baseline_verdict",
+                      "expression": "`baseline_verdict`"
+                    },
+                    {
+                      "name": "candidate_verdict",
+                      "expression": "`candidate_verdict`"
+                    },
+                    {
+                      "name": "verdict",
+                      "expression": "`verdict`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "frame": {
+                "showTitle": true,
+                "title": "Billing decision",
+                "showDescription": true,
+                "description": "PASS: all checks passed. FAIL: at least one check did not pass. BLOCKED: evidence is incomplete."
+              },
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "baseline_verdict",
+                    "displayName": "Baseline"
+                  },
+                  {
+                    "fieldName": "candidate_verdict",
+                    "displayName": "Candidate"
+                  },
+                  {
+                    "fieldName": "verdict",
+                    "displayName": "Overall"
+                  }
+                ]
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 8,
+            "width": 7,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "evaluation_state",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "execution_summary",
+                  "fields": [
+                    {
+                      "name": "evaluation_status",
+                      "expression": "`evaluation_status`"
+                    },
+                    {
+                      "name": "assertion_count",
+                      "expression": "`assertion_count`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "frame": {
+                "showTitle": true,
+                "title": "Evaluation receipt",
+                "showDescription": true,
+                "description": "This is the evaluator's status, not the whole pipeline's status."
+              },
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "evaluation_status",
+                    "displayName": "Evaluation status"
+                  },
+                  {
+                    "fieldName": "assertion_count",
+                    "displayName": "Checks saved"
+                  }
+                ]
+              }
+            }
+          },
+          "position": {
+            "x": 7,
+            "y": 8,
+            "width": 5,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "evaluation_identity",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "execution_summary",
+                  "fields": [
+                    {
+                      "name": "execution_id",
+                      "expression": "`execution_id`"
+                    },
+                    {
+                      "name": "batch_id",
+                      "expression": "`batch_id`"
+                    },
+                    {
+                      "name": "candidate_mode",
+                      "expression": "`candidate_mode`"
+                    },
+                    {
+                      "name": "started_at",
+                      "expression": "`started_at`"
+                    },
+                    {
+                      "name": "finished_at",
+                      "expression": "`finished_at`"
+                    },
+                    {
+                      "name": "captured_at",
+                      "expression": "`captured_at`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "frame": {
+                "showTitle": true,
+                "title": "Selected evaluation"
+              },
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "execution_id",
+                    "displayName": "Execution ID"
+                  },
+                  {
+                    "fieldName": "batch_id",
+                    "displayName": "Batch"
+                  },
+                  {
+                    "fieldName": "candidate_mode",
+                    "displayName": "Candidate mode"
+                  },
+                  {
+                    "fieldName": "started_at",
+                    "displayName": "Started"
+                  },
+                  {
+                    "fieldName": "finished_at",
+                    "displayName": "Finished"
+                  },
+                  {
+                    "fieldName": "captured_at",
+                    "displayName": "Evidence saved"
+                  }
+                ]
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 11,
+            "width": 12,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "evaluation_reason",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "execution_summary",
+                  "fields": [
+                    {
+                      "name": "reason",
+                      "expression": "`reason`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "frame": {
+                "showTitle": true,
+                "title": "What happened",
+                "showDescription": true,
+                "description": "Blank counts and BLOCKED verdicts mean there is no trusted billing result for this selection."
+              },
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "reason",
+                    "displayName": "Reason"
+                  }
+                ]
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 14,
+            "width": 12,
+            "height": 3
+          }
+        }
+      ]
+    },
+    {
+      "name": "bills",
+      "displayName": "Session bills",
+      "pageType": "PAGE_TYPE_CANVAS",
+      "layoutVersion": "GRID_V1",
+      "layout": [
+        {
+          "widget": {
+            "name": "bills_header",
+            "multilineTextboxSpec": {
+              "lines": [
+                "## Which bills need attention?\n\n",
+                "Each row is one charging session for the baseline or candidate. Amounts come from the selected evaluation's saved evidence. A positive difference means the bill is too high. Choose **FAIL** below to focus on problems."
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 12,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "release_role",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "session_bills",
+                  "fields": [
+                    {
+                      "name": "release_role",
+                      "expression": "`release_role`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "filter-multi-select",
+              "frame": {
+                "showTitle": true,
+                "title": "Baseline or candidate"
+              },
+              "encodings": {
+                "fields": [
+                  {
+                    "fieldName": "release_role",
+                    "queryName": "main_query",
+                    "displayName": "Baseline or candidate"
+                  }
+                ]
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 2,
+            "width": 6,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "billing_verdict",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "session_bills",
+                  "fields": [
+                    {
+                      "name": "verdict",
+                      "expression": "`verdict`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "filter-multi-select",
+              "frame": {
+                "showTitle": true,
+                "title": "Session result"
+              },
+              "encodings": {
+                "fields": [
+                  {
+                    "fieldName": "verdict",
+                    "queryName": "main_query",
+                    "displayName": "Session result"
+                  }
+                ]
+              }
+            }
+          },
+          "position": {
+            "x": 6,
+            "y": 2,
+            "width": 6,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "session_bills",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "session_bills",
+                  "fields": [
+                    {
+                      "name": "session_id",
+                      "expression": "`session_id`"
+                    },
+                    {
+                      "name": "release_role",
+                      "expression": "`release_role`"
+                    },
+                    {
+                      "name": "currency",
+                      "expression": "`currency`"
+                    },
+                    {
+                      "name": "expected_amount",
+                      "expression": "`expected_amount`"
+                    },
+                    {
+                      "name": "actual_amount",
+                      "expression": "`actual_amount`"
+                    },
+                    {
+                      "name": "difference",
+                      "expression": "`difference`"
+                    },
+                    {
+                      "name": "amount_status",
+                      "expression": "`amount_status`"
+                    },
+                    {
+                      "name": "verdict",
+                      "expression": "`verdict`"
+                    },
+                    {
+                      "name": "passed_checks",
+                      "expression": "`passed_checks`"
+                    },
+                    {
+                      "name": "failed_checks",
+                      "expression": "`failed_checks`"
+                    },
+                    {
+                      "name": "blocked_checks",
+                      "expression": "`blocked_checks`"
+                    },
+                    {
+                      "name": "execution_id",
+                      "expression": "`execution_id`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "frame": {
+                "showTitle": true,
+                "title": "Expected charges and actual bills",
+                "showDescription": true,
+                "description": "Failed checks appear first. Filters on this page do not change the overview totals."
+              },
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "session_id",
+                    "displayName": "Charging session"
+                  },
+                  {
+                    "fieldName": "release_role",
+                    "displayName": "Release"
+                  },
+                  {
+                    "fieldName": "currency",
+                    "displayName": "Currency"
+                  },
+                  {
+                    "fieldName": "expected_amount",
+                    "displayName": "Expected charge",
+                    "format": {
+                      "type": "number",
+                      "decimalPlaces": {
+                        "type": "max",
+                        "places": 6
+                      }
+                    }
+                  },
+                  {
+                    "fieldName": "actual_amount",
+                    "displayName": "Actual bill",
+                    "format": {
+                      "type": "number",
+                      "decimalPlaces": {
+                        "type": "max",
+                        "places": 6
+                      }
+                    }
+                  },
+                  {
+                    "fieldName": "difference",
+                    "displayName": "Over / under charge",
+                    "format": {
+                      "type": "number",
+                      "decimalPlaces": {
+                        "type": "max",
+                        "places": 6
+                      }
+                    }
+                  },
+                  {
+                    "fieldName": "amount_status",
+                    "displayName": "Amount check"
+                  },
+                  {
+                    "fieldName": "verdict",
+                    "displayName": "Session result"
+                  },
+                  {
+                    "fieldName": "passed_checks",
+                    "displayName": "Passed"
+                  },
+                  {
+                    "fieldName": "failed_checks",
+                    "displayName": "Failed",
+                    "style": {
+                      "type": "basic",
+                      "rules": [
+                        {
+                          "condition": {
+                            "operand": {
+                              "type": "data-value",
+                              "value": "0"
+                            },
+                            "operator": ">"
+                          },
+                          "backgroundColor": {
+                            "hex": "#FFE3DB"
+                          }
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "fieldName": "blocked_checks",
+                    "displayName": "Blocked",
+                    "style": {
+                      "type": "basic",
+                      "rules": [
+                        {
+                          "condition": {
+                            "operand": {
+                              "type": "data-value",
+                              "value": "0"
+                            },
+                            "operator": ">"
+                          },
+                          "backgroundColor": {
+                            "hex": "#FFF0C2"
+                          }
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "fieldName": "execution_id",
+                    "displayName": "Evaluation ID"
+                  }
+                ]
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 4,
+            "width": 12,
+            "height": 10
+          }
+        },
+        {
+          "widget": {
+            "name": "missing_bills",
+            "multilineTextboxSpec": {
+              "lines": [
+                "## No rows?\n\n",
+                "Check the overview's evaluation status and reason. Failed or incomplete evaluations show no bills; older results are never substituted. Clear the page filters to see all bills."
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 14,
+            "width": 12,
+            "height": 2
+          }
+        }
+      ]
+    },
+    {
+      "name": "filters",
+      "displayName": "Choose an evaluation",
+      "pageType": "PAGE_TYPE_GLOBAL_FILTERS",
+      "layoutVersion": "GRID_V1",
+      "layout": [
+        {
+          "widget": {
+            "name": "execution_id",
+            "queries": [
+              {
+                "name": "available_executions",
+                "query": {
+                  "datasetName": "execution_choices",
+                  "fields": [
+                    {
+                      "name": "execution_id",
+                      "expression": "`execution_id`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "execution_summary_parameter",
+                "query": {
+                  "datasetName": "execution_summary",
+                  "disaggregated": false,
+                  "parameters": [
+                    {
+                      "name": "execution_id",
+                      "keyword": "execution_id"
+                    }
+                  ]
+                }
+              },
+              {
+                "name": "session_bills_parameter",
+                "query": {
+                  "datasetName": "session_bills",
+                  "disaggregated": false,
+                  "parameters": [
+                    {
+                      "name": "execution_id",
+                      "keyword": "execution_id"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "filter-single-select",
+              "frame": {
+                "showTitle": true,
+                "title": "Evaluation",
+                "showDescription": true,
+                "description": "Choose latest or a saved execution ID."
+              },
+              "selection": {
+                "defaultSelection": {
+                  "values": {
+                    "dataType": "STRING",
+                    "values": [
+                      {
+                        "value": "latest"
+                      }
+                    ]
+                  }
+                }
+              },
+              "encodings": {
+                "fields": [
+                  {
+                    "fieldName": "execution_id",
+                    "queryName": "available_executions"
+                  },
+                  {
+                    "parameterName": "execution_id",
+                    "queryName": "execution_summary_parameter"
+                  },
+                  {
+                    "parameterName": "execution_id",
+                    "queryName": "session_bills_parameter"
+                  }
+                ]
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 6,
+            "height": 2
+          }
+        }
+      ]
+    }
+  ],
+  "uiSettings": {
+    "theme": {
+      "canvasBackgroundColor": {
+        "light": "#F4F7F8",
+        "dark": "#17232B"
+      },
+      "widgetBackgroundColor": {
+        "light": "#FFFFFF",
+        "dark": "#202F39"
+      },
+      "widgetBorderColor": {
+        "light": "#FFFFFF",
+        "dark": "#202F39"
+      },
+      "fontColor": {
+        "light": "#172D3B",
+        "dark": "#ECF2F5"
+      },
+      "selectionColor": {
+        "light": "#0072B2",
+        "dark": "#71C6F5"
+      },
+      "visualizationColors": [
+        "#009E73",
+        "#D55E00",
+        "#E69F00",
+        "#0072B2",
+        "#CC79A7"
+      ],
+      "widgetHeaderAlignment": "LEFT"
+    }
+  }
+}
