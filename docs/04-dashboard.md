@@ -2,6 +2,10 @@
 
 The bundle creates the job and a published dashboard. After deployment, you can start simulations with **Run now** and read the results without writing SQL.
 
+![ChargeAssert dashboard showing 100 sessions, 1,300 passed checks, 100 failed checks, no blocked checks and a successful evaluation.](images/generated-billing-dashboard-2026-10-15.png)
+
+*Live `amount_error` result on 2026-10-15: evaluation succeeded, baseline billing passed, and the deliberately incorrect candidate bills failed.*
+
 ## Deploy once after pulling changes
 
 From the ChargeAssert folder in the Databricks terminal, run each command in order:
@@ -53,7 +57,7 @@ The dashboard's default `latest` means **latest evaluation**, including failed a
 
 The evaluation status does not cover the earlier generation and ingestion steps. Those can fail before an evaluator record exists. Check the parent job's status in **Jobs & Pipelines** for the outcome of the whole pipeline. If dashboard refresh itself fails, the job reports that failure; saved billing evidence remains available.
 
-Before the first evaluation creates its tables, dashboard queries cannot return results. Run the pipeline to populate them. The first live deployment, dashboard layout and refresh still need verification in Databricks.
+Before the first evaluation creates its tables, dashboard queries cannot return results. Run the pipeline to populate them. The screenshot above confirms the dashboard renders the expected 100-session result in Databricks. Automatic refresh and failed-run handling still need separate verification.
 
 ## What is stored in Git?
 
