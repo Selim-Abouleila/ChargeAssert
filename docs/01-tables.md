@@ -49,10 +49,10 @@ The original demo prices **12.5 kWh at EUR 0.45/kWh** as **EUR 5.63**, excluding
 
 Generated sessions have varied meter readings and durations. Each session has seven checks for each billing version: expected calculation available, final-record count, energy, duration, currency, tariff and amount.
 
-| Generated test with two sessions | Baseline | Candidate | Checks |
+| Generated test with 100 sessions | Baseline | Candidate | Checks |
 | --- | --- | --- | --- |
-| `candidate_mode=healthy` | PASS | PASS | 28 PASS |
-| `candidate_mode=amount_error` | PASS | FAIL | 26 PASS / 2 FAIL; each candidate amount is EUR 0.87 too high |
+| `candidate_mode=healthy` | PASS | PASS | 1,400 PASS |
+| `candidate_mode=amount_error` (default full pipeline) | PASS | FAIL | 1,300 PASS / 100 FAIL; each candidate amount is EUR 0.87 too high |
 
 For the same batch, both modes use the same charging inputs and keep separate results. Evaluating that batch again adds a new execution snapshot without adding duplicate session records. The full pipeline creates a new batch by default; set `batch_id` to reuse one.
 
@@ -60,7 +60,7 @@ For the same batch, both modes use the same charging inputs and keep separate re
 
 The original amount examples and a completed execution with seven snapshots have been verified in Databricks. A [generated Gold result](03-generated-sessions.md#confirmed-result) now confirms two sessions, 28 checks and PASS for both billing versions and overall. Its job completion record, deliberate-error test, repeat runs and failure recovery still need checking. Real release replay and automated GitHub checks remain planned.
 
-There are seven manual jobs: `create_tables`, `publish_ingestion_demo`, `generate_sessions`, `ingest_ocpp_files`, `combined_ingestion`, `evaluate_generated_batch` and `run_generated_pipeline`. The last one runs generation, ingestion and evaluation in order with one command. It picks a new batch name and defaults to two sessions with seed `42`; you can change the count, seed and candidate mode. It adds no tables. Each job stops when its work finishes.
+There are seven manual jobs: `create_tables`, `publish_ingestion_demo`, `generate_sessions`, `ingest_ocpp_files`, `combined_ingestion`, `evaluate_generated_batch` and `run_generated_pipeline`. The last one runs generation, ingestion and evaluation in order with one command. It picks a new batch name and defaults to 100 sessions, seed `42` and `amount_error`; you can change the count, seed and candidate mode. It adds no tables. Each job stops when its work finishes.
 
 - [Original MVP brief](OVERVIEW.pdf) — the business problem and target scope.
 - [Full runbook](02-runbook.md) — table rules, field definitions, limitations and remaining work.

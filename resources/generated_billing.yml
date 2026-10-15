@@ -30,11 +30,11 @@ resources:
         - name: batch_id
           default: "sessions-{{job.run_id}}"
         - name: session_count
-          default: "2"
+          default: "100"
         - name: seed
           default: "42"
         - name: candidate_mode
-          default: healthy
+          default: amount_error
       tasks:
         - task_key: generate_sessions
           run_job_task:

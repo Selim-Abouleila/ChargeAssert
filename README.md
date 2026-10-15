@@ -154,23 +154,21 @@ The [ingestion walkthrough](docs/02-runbook.md#incremental-ocpp-file-ingestion) 
 
 The [generated-session guide](docs/03-generated-sessions.md) covers this path from start to finish, including a simple Gold query.
 
-After deployment, run the whole pipeline. It picks a new batch name automatically and defaults to two sessions with seed `42`:
+After deployment, run the whole pipeline with its defaults: **100 simulated sessions**, seed `42` and deliberately incorrect candidate bills. It picks a new batch name automatically:
+
+```bash
+databricks bundle run -t dev run_generated_pipeline
+```
+
+This parent job generates 300 charging events, loads them with Auto Loader and checks both mock billing versions through Silver and Gold. Each step waits for the previous one to succeed. The candidate adds EUR 0.87 to every bill. Expect **1,300 PASS and 100 FAIL checks**: baseline PASS, candidate FAIL and overall FAIL. The job itself should succeed because it detected and saved the billing errors.
+
+To check correct candidate bills instead:
 
 ```bash
 databricks bundle run -t dev run_generated_pipeline --params candidate_mode=healthy
 ```
 
-This parent job creates two simulated sessions, loads their six events with Auto Loader and checks both mock billing versions through Silver and Gold. Each step waits for the previous one to succeed. `seed=42` makes the data repeatable. Expect **28 PASS checks**.
-
-To test whether it catches bad billing, create another batch with deliberately wrong candidate bills:
-
-```bash
-databricks bundle run -t dev run_generated_pipeline --params candidate_mode=amount_error
-```
-
-This adds EUR 0.87 to each candidate bill. Expect **26 PASS and 2 FAIL checks**: baseline PASS, candidate FAIL and overall FAIL. The job itself should succeed because it detected and saved the errors.
-
-Add `,session_count=10` to create ten sessions, or `,seed=123` to change the usage values. Each new run creates new session IDs and stops when finished. To check the same sessions again, use an explicit `batch_id`; the [guide](docs/03-generated-sessions.md) shows how.
+Expect **1,400 PASS checks** and all verdicts PASS. Use `--params session_count=10` for a smaller batch, or `--params candidate_mode=healthy,session_count=10` to change both settings. Add `,seed=123` to change the usage values. Each new run creates new session IDs and stops when finished. To check the same sessions again, use an explicit `batch_id`; the [guide](docs/03-generated-sessions.md) shows how.
 
 Open the parent run's `evaluate_generated_batch` child job and use the `execution_id` from its notebook output with [the generated execution check](sql/15_check_generated_billing.sql).
 

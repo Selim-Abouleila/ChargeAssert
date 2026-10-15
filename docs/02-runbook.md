@@ -340,15 +340,17 @@ For the short test guide, simple Gold query and recorded result, see [Generated 
 
 `run_generated_pipeline` is the parent job for the full flow. It calls `generate_sessions`, then `ingest_ocpp_files`, then `evaluate_generated_batch`, using [Run Job tasks](https://docs.databricks.com/aws/en/jobs/tasks/run-job). Both downstream steps require `ALL_SUCCESS`. It forwards `batch_id`, `session_count` and `seed` to generation, and the same `batch_id` plus `candidate_mode` to evaluation. It reuses the existing child jobs and their concurrency limits; it does not start a second checkpoint writer.
 
-Its defaults are `batch_id=sessions-{{job.run_id}}`, `session_count=2`, `seed=42` and `candidate_mode=healthy`. Databricks fills in the parent run ID using a [dynamic job parameter](https://docs.databricks.com/aws/en/jobs/dynamic-value-references). Generation and evaluation receive that same name. Each new full run gets new session IDs; the seed keeps the usage values repeatable. You can find the batch name in the parent run's parameters.
+Its defaults are `batch_id=sessions-{{job.run_id}}`, `session_count=100`, `seed=42` and `candidate_mode=amount_error`. The standalone generator and evaluator keep their own defaults; the parent passes its selected values to them. Databricks fills in the parent run ID using a [dynamic job parameter](https://docs.databricks.com/aws/en/jobs/dynamic-value-references). Generation and evaluation receive that same name. Each new full run gets new session IDs; the seed keeps the usage values repeatable. You can find the batch name in the parent run's parameters.
 
-After deployment, the shortest command with an explicit billing mode is:
+After deployment, run with the defaults:
 
 ```bash
-databricks bundle run -t dev run_generated_pipeline --params candidate_mode=healthy
+databricks bundle run -t dev run_generated_pipeline
 ```
 
-Use `candidate_mode=amount_error` to test bad bills. Add `,session_count=10` to create ten sessions, or `,seed=123` for different usage values. Session counts must be 1-1,000; seeds must be 0-4,294,967,295. Omitted values keep their defaults, including `healthy` if no mode is supplied.
+This creates 100 sessions and 300 events. The candidate overcharges each session by EUR 0.87. Expect 1,400 checks: **1,300 PASS and 100 FAIL**, with baseline PASS, candidate FAIL and overall FAIL. The job should still succeed because it detected and saved the errors.
+
+Use `--params candidate_mode=healthy` for correct bills and 1,400 PASS checks, or `--params session_count=10` for a smaller batch. Combine overrides with commas, for example `--params candidate_mode=healthy,session_count=10,seed=123`. Session counts must be 1-1,000; seeds must be 0-4,294,967,295. Omitted values keep their defaults.
 
 To reuse a batch, set `batch_id` explicitly and keep its count and seed unchanged. Otherwise, repeating the command creates a new batch. The parent allows one run at a time and has no schedule. Avoid overlapping it with other publishing or ingestion commands: a busy child job can be skipped, and job limits do not coordinate manual writers.
 

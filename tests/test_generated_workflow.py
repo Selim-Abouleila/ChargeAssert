@@ -40,8 +40,8 @@ class GeneratedWorkflowTests(unittest.TestCase):
     def test_manual_workflow_has_defaults_and_serializes_each_job(self):
         self.assertIn("      name: chargeassert_dev_run_generated_pipeline\n", self.parent)
         self.assertEqual(self.defaults, {
-            "batch_id": "sessions-{{job.run_id}}", "session_count": "2",
-            "seed": "42", "candidate_mode": "healthy",
+            "batch_id": "sessions-{{job.run_id}}", "session_count": "100",
+            "seed": "42", "candidate_mode": "amount_error",
         })
         for name in ("run_generated_pipeline", *CHILDREN):
             with self.subTest(job=name):
@@ -63,7 +63,7 @@ class GeneratedWorkflowTests(unittest.TestCase):
                 identities = {json.loads(row["payload"])["transactionInfo"]["transactionId"]
                               for row in rows}
                 self.assertLessEqual(len(batch_id), 32)
-                self.assertEqual(len(identities), 2)
+                self.assertEqual(len(identities), 100)
                 self.assertEqual({row["generator"]["batch_id"] for row in rows}, {batch_id})
                 session_ids.append(identities)
         self.assertEqual(len(session_ids), 2)
