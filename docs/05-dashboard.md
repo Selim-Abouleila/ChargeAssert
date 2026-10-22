@@ -1,4 +1,4 @@
-# Run ChargeAssert and read the results in Databricks
+# 05 — Run ChargeAssert and read the results in Databricks
 
 The bundle creates the job and a published dashboard. After deployment, you can start simulations with **Run now** and read the results without writing SQL.
 
@@ -69,4 +69,4 @@ Before the first evaluation creates its tables, dashboard queries cannot return 
 
 For dashboard development, run `python scripts/build_dashboard.py`, then `python scripts/build_dashboard.py --check`. SQL uses the bundle's configured catalog, so it is not tied to `workspace`.
 
-See the [generated-session guide](03-generated-sessions.md) for terminal commands and the [table guide](01-tables.md) for the data behind the results. Databricks documents [dashboard bundle resources](https://docs.databricks.com/aws/en/dev-tools/bundles/resources#dashboard) and [dashboard refresh tasks](https://docs.databricks.com/aws/en/jobs/tasks/dashboard).
+See the [generated-session guide](04-generated-sessions.md) for terminal commands and the [table guide](02-tables.md) for the data behind the results. Databricks documents [dashboard bundle resources](https://docs.databricks.com/aws/en/dev-tools/bundles/resources#dashboard) and [dashboard refresh tasks](https://docs.databricks.com/aws/en/jobs/tasks/dashboard).

@@ -1,4 +1,4 @@
-# 01 — ChargeAssert table guide
+# 02 — ChargeAssert table guide
 
 **ChargeAssert uses charging data to catch wrong bills and potentially unbilled sessions before a software release.**
 
@@ -58,11 +58,11 @@ For the same batch, both modes use the same charging inputs and keep separate re
 
 ## Current status and commands
 
-The original amount examples and a completed execution with seven snapshots have been verified in Databricks. A [generated Gold result](03-generated-sessions.md#confirmed-result) now confirms two sessions, 28 checks and PASS for both billing versions and overall. Its job completion record, deliberate-error test, repeat runs and failure recovery still need checking. Real release replay and automated GitHub checks remain planned.
+The original amount examples and a completed execution with seven snapshots have been verified in Databricks. A [generated Gold result](04-generated-sessions.md#confirmed-result) now confirms two sessions, 28 checks and PASS for both billing versions and overall. Its job completion record, deliberate-error test, repeat runs and failure recovery still need checking. Real release replay and automated GitHub checks remain planned.
 
-There are seven manual jobs: `create_tables`, `publish_ingestion_demo`, `generate_sessions`, `ingest_ocpp_files`, `combined_ingestion`, `evaluate_generated_batch` and `run_generated_pipeline`. The last one runs generation, ingestion and evaluation in order with one command. It picks a new batch name and defaults to 100 sessions, seed `42` and `amount_error`; you can change the count, seed and candidate mode. The bundle also publishes a [results dashboard](04-dashboard.md), refreshed after evaluation. It adds no tables. Each job stops when its work finishes.
+There are seven manual jobs: `create_tables`, `publish_ingestion_demo`, `generate_sessions`, `ingest_ocpp_files`, `combined_ingestion`, `evaluate_generated_batch` and `run_generated_pipeline`. The last one runs generation, ingestion and evaluation in order with one command. It picks a new batch name and defaults to 100 sessions, seed `42` and `amount_error`; you can change the count, seed and candidate mode. The bundle also publishes a [results dashboard](05-dashboard.md), refreshed after evaluation. It adds no tables. Each job stops when its work finishes.
 
-- [Original MVP brief](OVERVIEW.pdf) — the business problem and target scope.
-- [Full runbook](02-runbook.md) — table rules, field definitions, limitations and remaining work.
-- [Deploy the fixed demo](02-runbook.md#billing-regression-job-and-deployment) · [Check its execution](02-runbook.md#check-the-requested-execution).
-- [Generate sessions and check Gold](03-generated-sessions.md) · [File-ingestion demo](02-runbook.md#incremental-ocpp-file-ingestion).
+- [Original MVP brief](01-mvp-brief.pdf) — the business problem and target scope.
+- [Full runbook](03-runbook.md) — table rules, field definitions, limitations and remaining work.
+- [Deploy the fixed demo](03-runbook.md#billing-regression-job-and-deployment) · [Check its execution](03-runbook.md#check-the-requested-execution).
+- [Generate sessions and check Gold](04-generated-sessions.md) · [File-ingestion demo](03-runbook.md#incremental-ocpp-file-ingestion).

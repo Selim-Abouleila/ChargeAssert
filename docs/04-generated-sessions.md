@@ -1,4 +1,4 @@
-# Generated sessions: run and check
+# 04 — Generated sessions: run and check
 
 This test creates simulated charging sessions and checks their bills from the incoming files through Gold. It shows whether correct bills pass and incorrect bills are caught.
 
@@ -66,7 +66,7 @@ The separate commands still work. `combined_ingestion` creates and loads a batch
 
 ## 3. Read the results
 
-For normal runs, you can use **Jobs & Pipelines → chargeassert_dev_run_generated_pipeline → Run now**. Its evaluator refreshes the results dashboard after checking the bills. Open **ChargeAssert - Generated billing results (dev)** to inspect the summary and session bills. The [dashboard guide](04-dashboard.md) explains the execution selector and what each status means.
+For normal runs, you can use **Jobs & Pipelines → chargeassert_dev_run_generated_pipeline → Run now**. Its evaluator refreshes the results dashboard after checking the bills. Open **ChargeAssert - Generated billing results (dev)** to inspect the summary and session bills. The [dashboard guide](05-dashboard.md) explains the execution selector and what each status means.
 
 The SQL below remains available for direct checks.
 
@@ -99,4 +99,4 @@ The SQL output shared on **2026-10-04** showed:
 
 This confirms the saved healthy Gold result from the separate-job flow. The parent workflow with the new 100-session default, matching job completion record, deliberate-error test, repeat runs and failure recovery still need checking in Databricks.
 
-See the [table guide](01-tables.md) for what each table does and the [runbook](02-runbook.md#evaluate-generated-batches-through-gold) for detailed rules and limits.
+See the [table guide](02-tables.md) for what each table does and the [runbook](03-runbook.md#evaluate-generated-batches-through-gold) for detailed rules and limits.

@@ -1,8 +1,8 @@
-# 02 — Table rules, setup and verification
+# 03 — Table rules, setup and verification
 
-For a short overview of each table and its business purpose, start with the [table guide](01-tables.md).
+For a short overview of each table and its business purpose, start with the [table guide](02-tables.md).
 
-ChargeAssert helps EV charging teams find billing errors before a software release affects customers or leaves sessions unbilled. [OVERVIEW.pdf](OVERVIEW.pdf) defines the full MVP scope.
+ChargeAssert helps EV charging teams find billing errors before a software release affects customers or leaves sessions unbilled. [MVP brief](01-mvp-brief.pdf) defines the full MVP scope.
 
 The intended release test gives the same repeatable charging scenario to a baseline version and a candidate version. It checks both against an independent calculation of what the charge should be. A deliberately faulty candidate must fail; its corrected version must pass with the same recorded inputs. The current code demonstrates this with fixed responses and Python billing mocks. It stores the PASS/FAIL decisions in Databricks; publishing a GitHub release check is still planned.
 
@@ -29,7 +29,7 @@ The following results have been confirmed in Databricks:
 - On 2026-09-21, the Python-generated amount tests were confirmed. `mock-amount-bad-v1` has a passing baseline, a failing candidate and overall FAIL, with 13 passing / 1 failing checks. `mock-amount-fixed-v1` has PASS for both releases and overall, with 14 passing / 0 failing checks.
 - Execution `192226331898541:436138745571440:0`, started on 2026-09-23, was confirmed as `SUCCEEDED`, with seven saved result snapshots for seven distinct scenarios. Earlier failed attempts remain `FAILED` with no snapshots.
 
-The successful execution confirms that the original result capture works after the Spark filter fix. The exact financial values in those snapshots and the deliberate failure test before Gold still need checking. On 2026-10-04, a [generated Gold result](03-generated-sessions.md#confirmed-result) was also confirmed: two sessions, 28 checks and all three verdicts PASS. Its job completion record, deliberate-error test, repeat runs and recovery still need checking.
+The successful execution confirms that the original result capture works after the Spark filter fix. The exact financial values in those snapshots and the deliberate failure test before Gold still need checking. On 2026-10-04, a [generated Gold result](04-generated-sessions.md#confirmed-result) was also confirmed: two sessions, 28 checks and all three verdicts PASS. Its job completion record, deliberate-error test, repeat runs and recovery still need checking.
 
 The job keeps three runs with fixed responses (`smoke-run-v1`, `amount-bad-v1`, `amount-fixed-v1`) and four runs whose responses are calculated by the mock (`mock-amount-bad-v1`, `mock-amount-fixed-v1`, `mock-missing-cdr-bad-v1`, `mock-missing-cdr-fixed-v1`). Each uses one session (`txn-smoke-v1`), the same three OCPP-shaped charging events and one EUR energy tariff. A CDR, or charge detail record, is the billing record returned for a session.
 
@@ -336,7 +336,7 @@ The `evaluate_generated_batch` job completes the path from landed events to bill
 
 Its two job parameters are `batch_id` (default `sessions-repaired-001`) and `candidate_mode` (`healthy` by default, or `amount_error`). It allows one run at a time and stops when the batch is finished. It does not schedule more work or modify the source files, landing rows or Auto Loader checkpoint.
 
-For the short test guide, simple Gold query and recorded result, see [Generated sessions](03-generated-sessions.md). To run and inspect results through the Databricks UI, use the [dashboard guide](04-dashboard.md). The bundle publishes the dashboard and adds an `ALL_SUCCESS` refresh task to the evaluator. It reads the exact saved execution ID from the evaluation task value. A billing FAIL still refreshes; an evaluation processing error skips refresh and keeps the job failed. Refresh the dashboard manually to inspect those failed attempts. Dashboard status covers that evaluation; the parent job remains the source for generation and ingestion failures.
+For the short test guide, simple Gold query and recorded result, see [Generated sessions](04-generated-sessions.md). To run and inspect results through the Databricks UI, use the [dashboard guide](05-dashboard.md). The bundle publishes the dashboard and adds an `ALL_SUCCESS` refresh task to the evaluator. It reads the exact saved execution ID from the evaluation task value. A billing FAIL still refreshes; an evaluation processing error skips refresh and keeps the job failed. Refresh the dashboard manually to inspect those failed attempts. Dashboard status covers that evaluation; the parent job remains the source for generation and ingestion failures.
 
 `run_generated_pipeline` is the parent job for the full flow. It calls `generate_sessions`, then `ingest_ocpp_files`, then `evaluate_generated_batch`, using [Run Job tasks](https://docs.databricks.com/aws/en/jobs/tasks/run-job). Both downstream steps require `ALL_SUCCESS`. It forwards `batch_id`, `session_count` and `seed` to generation, and the same `batch_id` plus `candidate_mode` to evaluation. It reuses the existing child jobs and their concurrency limits; it does not start a second checkpoint writer.
 
@@ -552,7 +552,7 @@ Earlier completed snapshots with five scenarios can still be read by their exact
 
 Gold turns the billing comparisons into findings a business team can act on. An amount mismatch can flag a potential customer overcharge. A missing billing record can flag a potentially unbilled session. The results show what failed and keep the evidence needed to investigate it and review a release.
 
-Gold stores the detailed checks, current scenario verdicts and saved execution snapshots that the pipeline does not overwrite. It supports a human release decision today. The generated results now have a bundle-managed [dashboard](04-dashboard.md). The automated GitHub release check remains future work; Gold does not yet report total customer overbilling or operator revenue loss.
+Gold stores the detailed checks, current scenario verdicts and saved execution snapshots that the pipeline does not overwrite. It supports a human release decision today. The generated results now have a bundle-managed [dashboard](05-dashboard.md). The automated GitHub release check remains future work; Gold does not yet report total customer overbilling or operator revenue loss.
 
 | Table | Status | One row represents | Important fields |
 | --- | --- | --- | --- |
