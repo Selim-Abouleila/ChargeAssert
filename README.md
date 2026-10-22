@@ -2,119 +2,106 @@
 
 **ChargeAssert helps EV charging teams catch billing errors before a software release overcharges customers or leaves completed sessions unbilled.**
 
-A working MVP built with synthetic charging data, Databricks, Delta Lake, Python and SQL. It turns charging events and billing records into a clear PASS or FAIL, with the evidence needed to explain the result.
+A working MVP built with simulated charging data, **Databricks, Delta Lake, Auto Loader, Python and SQL**. It compares reported bills with what each session should cost, then saves a clear result and the evidence behind it.
 
 [Business value](#why-it-matters) · [Architecture](#architecture) · [Run the demo](#run-the-billing-demo) · [Project status](#current-status-and-next-steps)
 
 ## Why it matters
 
-A charging session can finish successfully while its bill is wrong. A release might calculate the wrong amount or fail to produce a billing record at all. A successful data job alone does not prove that billing is correct.
+A charging session can finish successfully while its bill is wrong. A software change might use the wrong price, charge too much or produce no bill at all. A successful data job alone does not prove that billing is correct.
 
-ChargeAssert is designed to help teams answer three questions before a release:
+ChargeAssert helps teams answer three questions before a release:
 
-| Business question | What ChargeAssert provides |
+| Business question | What ChargeAssert shows |
 | --- | --- |
-| Could customers be overcharged? | A comparison between the reported amount and an independently calculated charge. |
-| Could completed sessions go unbilled? | A check that each completed test session has exactly one final billing record. |
-| Can we explain a failed check? | Expected and actual values, the difference, source evidence and saved results for that job execution. |
+| Could customers be overcharged? | The expected charge, reported charge and difference. |
+| Could completed sessions go unbilled? | Whether each completed test session has exactly one final billing record. |
+| Can we explain a failure? | The failed check, source records and saved result for that job run. |
 
-Engineering teams can use the evidence to investigate a change. Billing teams can understand the financial difference without reading the pipeline code. The longer-term goal is to make these checks part of the release approval process.
+Engineers can trace a problem to its inputs. Billing teams can see the amount at stake. Release owners can use the evidence to decide whether a change needs investigation. Automating that release check is a future step.
 
 ### A concrete example
 
-The amount demo uses a session that delivers **12.5 kWh at EUR 0.45 per kWh**. Its expected charge is **EUR 5.63**, rounded once at the session total, excluding VAT.
+A test session delivers **12.5 kWh at EUR 0.45/kWh**. Its expected charge is **EUR 5.63**, rounded once at the session total, excluding VAT.
 
-| Billing behavior | Expected amount | Reported amount | Difference | Result |
+| Billing version | Expected | Reported | Difference | Result |
 | --- | ---: | ---: | ---: | --- |
 | Healthy baseline | EUR 5.63 | EUR 5.63 | EUR 0.00 | PASS |
-| Candidate with a deliberate billing error | EUR 5.63 | EUR 6.50 | +EUR 0.87 | FAIL |
+| Candidate with a billing error | EUR 5.63 | EUR 6.50 | +EUR 0.87 | FAIL |
 | Corrected candidate | EUR 5.63 | EUR 5.63 | EUR 0.00 | PASS |
 
-A separate missing-record scenario checks what happens when a completed session produces no final billing record. The expected charge remains visible, and the check fails instead of treating the missing record as a zero charge.
+Another test deliberately leaves out the final bill. ChargeAssert flags the missing record and keeps the expected charge visible, helping show what could go unbilled. It does not treat a missing bill as a zero charge.
 
-These are controlled test cases. They show how a defect is detected; they are not measurements of actual customer charges, revenue loss or savings.
+These are controlled examples using simulated data, not measured customer losses or savings.
 
 ## How it works
 
-1. **Keep the inputs.** Store the charging events, tariffs and reported billing records so a result can be traced back to its source.
-2. **Calculate what should have been billed.** Use session meter readings and the applicable tariff to calculate the expected charge in SQL.
-3. **Check both billing versions.** Compare the baseline and candidate records against that independent expectation.
-4. **Save the decision and its evidence.** Record each rule's result and retain a separate snapshot for every completed job execution.
+1. **Keep the inputs.** Store charging events, tariffs and reported bills so each result can be traced back to its source.
+2. **Work out the expected charge.** SQL uses the session's meter readings and tariff to calculate what should have been billed.
+3. **Compare the bills.** Check both billing versions against that calculation.
+4. **Save the evidence.** Keep each check's result and a separate saved copy for each completed job run.
 
-The **baseline** represents healthy billing behavior; the **candidate** represents the change under test. Today they are Python mocks or saved responses, rather than real software release builds. The SQL calculation is separate from the mock billing code: simply comparing two versions could miss an error shared by both.
+The **baseline** is the healthy billing version; the **candidate** is the version being tested. Both currently use Python mocks or saved responses. The expected charge is calculated separately in SQL, so an error shared by both versions should still be caught.
 
-Charging events use an OCPP-shaped format, and billing records use an OCPI-shaped format. A **CDR**, or charge detail record, is the final record describing a session's usage and charge.
+Charging events follow an OCPP-shaped format; bills follow an OCPI-shaped format. A **CDR**, or charge detail record, describes a session's usage and charge. Full protocol certification is outside the current scope.
 
 ## Architecture
 
-Databricks runs the jobs. Delta tables hold the data, and Unity Catalog organizes it into Bronze, Silver and Gold schemas. There are two billing paths: the original fixed scenarios and a new path that checks a selected batch of generated sessions. They use separate tables.
+Databricks runs the jobs, Delta Lake stores the data, and Unity Catalog groups it into Bronze, Silver and Gold. The fixed test cases and newly generated sessions use separate tables, so new batches do not change the original demo results.
 
 ```mermaid
 flowchart TB
-    subgraph Fixed["Fixed regression tests"]
-        Fixtures["Seven saved scenarios"] --> FixedJob["create_tables"]
-    end
-    subgraph Generated["Generated sessions: one selected batch"]
-        Generator["Generate repeatable charging events"] --> Files["JSONL files in a managed Volume"]
-        Files --> Loader["Auto Loader: process available files, then stop"]
-        Checkpoint["Persistent checkpoint"] --- Loader
-        Loader --> Landing["Bronze landing: original lines and file details"]
-        Landing --> Evaluate["Validate every declared session; run both billing mocks"]
-    end
-    FixedJob --> Bronze["BRONZE: charging events, tariffs and reported bills<br/>Separate original and generated_* tables"]
-    Evaluate --> Bronze
-    Bronze --> Expected["SILVER: independently calculate the expected charge"]
-    Bronze --> Actual["SILVER: prepare the reported usage and charge"]
-    Expected --> Checks
-    Actual --> Checks
-    subgraph Gold["GOLD: turn billing checks into business decisions"]
-        Checks["Find wrong amounts, incorrect usage and missing billing records"]
-        Checks --> Verdict["PASS or FAIL, with clear reasons"]
-        Verdict --> History["Save complete checks and evidence for this exact execution"]
-    end
-    Execution["Job completion and full session coverage"] --> History
-    History --> Customers["Customer trust<br/>Show overcharges and the amount difference"]
-    History --> Revenue["Revenue protection<br/>Flag potentially unbilled sessions"]
-    History --> Release["Release review<br/>Give teams evidence to approve or investigate a change"]
-    style Gold fill:#fff8db,stroke:#a66b00,stroke-width:2px,color:#332400
+    Fixed["Seven fixed test cases"] --> Bronze
+    Generator["Generate repeatable charging sessions"] --> Files["JSONL files"]
+    Files --> Loader["Auto Loader + saved checkpoint"]
+    Loader --> Landing["Bronze landing: source lines and file details"]
+    Landing --> Validate["Check the full batch and create mock bills"]
+    Validate --> Bronze["BRONZE<br/>Charging events, tariffs and reported bills"]
+    Bronze --> Expected["SILVER<br/>Calculate expected charges"]
+    Bronze --> Actual["SILVER<br/>Prepare reported bills"]
+    Expected --> Gold
+    Actual --> Gold
+    Gold["GOLD<br/>Billing checks, verdicts and saved evidence"]
+    Gold --> Customers["Customer protection<br/>Show overcharges and amount differences"]
+    Gold --> Revenue["Revenue protection<br/>Find potentially unbilled sessions"]
+    Gold --> Release["Release review<br/>Explain what passed or needs investigation"]
+    style Gold fill:#fff8db,stroke:#a66b00,stroke-width:2px
     classDef business fill:#edf8f0,stroke:#2f7044,color:#163d23
     class Customers,Revenue,Release business
 ```
 
-**Generated sessions now have a path through Gold:** run `evaluate_generated_batch` after ingestion. It validates one complete batch and writes its own `generated_*` tables. The original `create_tables` job still checks only its seven fixed scenarios. This connection is implemented; its Databricks verification is still pending.
-
-**Gold provides the business evidence:** billing teams can see how much a reported charge differs from the expected amount, operations teams can find completed sessions with missing billing records, and release owners can review a PASS or FAIL with its supporting evidence. These outputs support human release reviews today; automated GitHub release checks are planned.
-
 | Layer | Purpose | Main records |
 | --- | --- | --- |
-| **Bronze** | Keep the original evidence and the history of job attempts. | Charging events, tariffs, billing records, test inputs and execution status. The separate landing table also keeps source filenames, timestamps and record hashes. |
-| **Silver** | Turn that evidence into records that can be compared. | Session start/end and energy, tariff history, independently expected charges and normalized reported charges. |
-| **Gold** | Help teams catch customer overcharges, find potentially unbilled sessions and make informed release decisions. | Amount differences, missing-record checks, PASS/FAIL verdicts and saved evidence for each execution. |
+| **Bronze** | Keep the original evidence. | Events, tariffs, bills, source-file details and job status. |
+| **Silver** | Make the records ready to compare. | Sessions, tariff history, expected charges and reported charges. |
+| **Gold** | Give teams billing results they can act on. | Amount differences, missing-bill checks, verdicts and saved evidence. |
 
-The [table guide](docs/01-tables.md) explains each table's purpose. The [runbook](docs/02-runbook.md) covers the full data model, table rules and job dependencies.
+**Gold connects the pipeline to business decisions.** It gives billing teams the charge difference, operations teams a list of sessions with missing bills, and release owners a result they can investigate. It supports human review today; automatic GitHub release checks are planned.
+
+See the [table guide](docs/01-tables.md) for each table's role and the [runbook](docs/02-runbook.md) for the detailed rules.
 
 ### What makes a result trustworthy
 
-- **Independent calculation:** both billing versions are checked against the expected charge, using decimal arithmetic and an explicit rounding rule.
-- **Complete checks:** each scenario needs seven checks for each billing version: a usable expected charge, final-record count, energy, duration, currency, tariff and amount.
-- **Traceable evidence:** raw payloads, hashes and expected-versus-actual values help explain a failure.
-- **Separate execution history:** saved results belong to an exact job attempt. A failed or incomplete attempt cannot borrow an earlier PASS.
+- **Separate calculations:** bills are checked against an independent SQL calculation, using decimals and a clear rounding rule.
+- **Full coverage:** every session needs seven checks for each version: expected charge available, bill count, energy, duration, currency, tariff and amount.
+- **Traceable inputs:** original records, hashes and expected-versus-reported values help explain a failure.
+- **Results tied to a run:** a failed or incomplete attempt must not use an older PASS as its result.
 
-`release_verdict` shows the current fixed-scenario results; `execution_verdict` and `job_execution` identify an exact attempt. Generated batches have the same separation in `generated_release_verdict`, `generated_execution_verdict` and `generated_job_execution`. Always use the matching execution record and saved snapshot.
+The current billing tables and saved execution results serve different purposes. To confirm a run, check its own completion record and saved result together. The verification queries below do that.
 
 ## Run the billing demo
 
 ### Requirements
 
-- A Databricks workspace with Unity Catalog, a SQL warehouse and serverless notebook/job compute.
-- Databricks CLI **0.295.0 or newer**, authenticated to that workspace.
-- Permission to create the bundle's schemas, managed Volume, tables and jobs, and to use the compute.
+- A Databricks workspace with Unity Catalog, a SQL warehouse and serverless job compute.
+- Databricks CLI **0.295.0 or newer**, authenticated to the workspace.
+- Permission to create schemas, a managed Volume, tables and jobs, and to use the compute.
 
-The defaults in [databricks.yml](databricks.yml) use the `workspace` catalog and look up a warehouse named `Serverless Starter Warehouse`. Adjust the configuration if your workspace differs. The default schemas are `chargeassert_dev_bronze`, `chargeassert_dev_silver` and `chargeassert_dev_gold`.
+The defaults in [databricks.yml](databricks.yml) use the `workspace` catalog and a warehouse called `Serverless Starter Warehouse`. Adjust these if your workspace differs.
 
 ### Deploy and run
 
-From your local repository or Databricks Git folder, run these commands in order. Continue only after the previous command succeeds.
+Run from the repository folder, one command at a time. Continue only after the previous command succeeds.
 
 ```bash
 git switch dev
@@ -124,15 +111,15 @@ databricks bundle deploy -t dev
 databricks bundle run -t dev create_tables
 ```
 
-Despite its name, `create_tables` runs the full billing demo: it prepares the tables, loads the fixed inputs, generates the mock responses, runs the checks and saves the results. Pulling Git changes alone does not update the deployed job; deploy before running changed code.
+Despite its name, `create_tables` runs the full fixed demo: it creates the tables, loads inputs, generates mock bills, checks them and saves the results. Pulling Git changes alone does not update the deployed job.
 
-The job runs **seven fixed scenarios**, with **14 checks per scenario** and **98 check results** in a complete execution. They cover a healthy case, saved wrong-amount/corrected responses, computed wrong-amount/corrected responses and missing-record/corrected responses.
+The demo has **seven fixed test cases and 98 checks**. These cover healthy billing, wrong amounts and missing bills, along with their corrected versions.
 
-**A successful job can contain financial FAIL results.** The bad scenarios are deliberately wrong. Job success means the processing and evidence capture completed; the financial verdict says whether a scenario passed its billing checks.
+**Job success and billing success are different.** A job should succeed when it correctly detects and records a deliberately wrong bill. That bill's result should still be FAIL.
 
 ### Check the result
 
-In Databricks SQL Editor, find the execution matching the job run you just started:
+Find the run you just started in the Databricks SQL editor:
 
 ```sql
 SELECT execution_id, started_at, status, reason
@@ -141,121 +128,81 @@ ORDER BY started_at DESC
 LIMIT 20;
 ```
 
-Use that exact `execution_id` with [sql/12_check_execution.sql](sql/12_check_execution.sql). The [verification instructions](docs/02-runbook.md#check-the-requested-execution) give all parameter values and expected outcomes.
+Use its exact `execution_id` with [the execution check](sql/12_check_execution.sql). The [runbook](docs/02-runbook.md#check-the-requested-execution) explains the required parameters.
 
-For the amount mock pair, expect:
-
-| Scenario | Baseline | Candidate | Overall | Passed / failed checks |
+| Amount test | Baseline | Candidate | Overall | Passed / failed |
 | --- | --- | --- | --- | --- |
-| `mock-amount-bad-v1` | PASS | FAIL | FAIL | 13 / 1 |
-| `mock-amount-fixed-v1` | PASS | PASS | PASS | 14 / 0 |
+| Wrong amount | PASS | FAIL | FAIL | 13 / 1 |
+| Corrected amount | PASS | PASS | PASS | 14 / 0 |
 
-Also confirm that the Databricks job itself finished successfully. The verification query returns `BLOCKED` for a missing, failed or incomplete execution instead of using a previous result. After a failed attempt, start a new complete run; repair runs are not supported by the current execution tracking.
+Also confirm that the Databricks job finished successfully. The verification query returns BLOCKED for missing, failed or incomplete runs. After a failed attempt, start a new full run; the current tracking does not support job repairs.
 
 ## Run the file ingestion demo
 
-After deploying the bundle, publish the first sample file and ingest it:
+After deployment, publish a sample file and load it into Bronze:
 
 ```bash
 databricks bundle run -t dev publish_ingestion_demo --params batch=batch_001
 databricks bundle run -t dev ingest_ocpp_files
 ```
 
-Check the landed records in Databricks SQL Editor:
+Auto Loader remembers processed files through its saved checkpoint. The demo checks that loading the same files again does not add rows: the two sample files should follow **3 → 3 → 6 → 6** as they are published and ingestion is repeated.
 
-```sql
-SELECT source_file_name, COUNT(*) AS landed_rows
-FROM workspace.chargeassert_dev_bronze.ocpp_events_landing
-WHERE source_file_name IN ('batch_001.jsonl', 'batch_002.jsonl')
-GROUP BY source_file_name
-ORDER BY source_file_name;
-```
-
-Run ingestion again, publish the second file, then ingest twice more. Check the row counts after each ingestion run.
-
-```bash
-databricks bundle run -t dev ingest_ocpp_files
-databricks bundle run -t dev publish_ingestion_demo --params batch=batch_002
-databricks bundle run -t dev ingest_ocpp_files
-databricks bundle run -t dev ingest_ocpp_files
-```
-
-On the first demonstration, rows from these two sample files should follow **3 → 3 → 6 → 6**. The query excludes files created by the session generator. The checkpoint remembers which files were processed. Landing keeps repeated events from different files. The generated evaluator can remove identical copies after validating the selected batch.
-
-Keep the published files and checkpoint unchanged. Repeating the whole demonstration after both files have landed leaves six rows. These jobs run on demand and stop when finished; no continuous service or schedule is configured.
-
-See the [ingestion runbook](docs/02-runbook.md#incremental-ocpp-file-ingestion) and [verification queries](sql/13_check_ocpp_ingestion.sql) for source metadata, hash and repeat-run checks.
+The [ingestion walkthrough](docs/02-runbook.md#incremental-ocpp-file-ingestion) has the full sequence and [SQL checks](sql/13_check_ocpp_ingestion.sql). Keep the source files and checkpoint unchanged when testing repeat runs.
 
 ## Generate sessions and check their bills
 
-After deployment, use a fresh batch name. These commands generate two sessions, ingest their six events, then check both billing mocks against the independent SQL calculation:
+The [generated-session guide](docs/03-generated-sessions.md) covers this path from start to finish. Deployment also creates a [results dashboard](docs/04-dashboard.md): use the job's **Run now** button, then read the refreshed billing results without writing SQL.
+
+After deployment, run the whole pipeline with its defaults: **100 simulated sessions**, seed `42` and deliberately incorrect candidate bills. It picks a new batch name automatically:
 
 ```bash
-databricks bundle run -t dev combined_ingestion --params batch_id=sessions-repaired-001,session_count=2,seed=42
-databricks bundle run -t dev evaluate_generated_batch --params batch_id=sessions-repaired-001,candidate_mode=healthy
+databricks bundle run -t dev run_generated_pipeline
 ```
 
-Wait for each command to finish:
+This parent job generates 300 charging events, loads them with Auto Loader and checks both mock billing versions through Silver and Gold. Each step waits for the previous one to succeed. The candidate adds EUR 0.87 to every bill. Expect **1,300 PASS and 100 FAIL checks**: baseline PASS, candidate FAIL and overall FAIL. The job itself should succeed because it detected and saved the billing errors.
 
-- **`combined_ingestion` creates and loads the sessions.** It generates two simulated sessions, then uses Auto Loader to load their six events into Bronze. `seed=42` makes the data repeatable.
-- **`evaluate_generated_batch` checks the bills.** With `candidate_mode=healthy`, it calculates the expected charges, compares both simulated billing versions and saves the results in Gold. Expect **28 PASS checks**.
-
-**Test whether bad billing is caught.** Use the same sessions, but add EUR 0.87 to each candidate bill:
+To check correct candidate bills instead:
 
 ```bash
-databricks bundle run -t dev evaluate_generated_batch --params batch_id=sessions-repaired-001,candidate_mode=amount_error
+databricks bundle run -t dev run_generated_pipeline --params candidate_mode=healthy
 ```
 
-Expect **26 PASS and 2 FAIL checks**: one incorrect charge caught per session. Baseline stays PASS; candidate and overall become FAIL. The job itself should succeed because it detected and saved the errors. Running `candidate_mode=healthy` again should give 28 PASS checks under a new execution ID.
+Expect **1,400 PASS checks** and all verdicts PASS. Use `--params session_count=10` for a smaller batch, or `--params candidate_mode=healthy,session_count=10` to change both settings. Add `,seed=123` to change the usage values. Each new run creates new session IDs and stops when finished. To check the same sessions again, use an explicit `batch_id`; the [guide](docs/03-generated-sessions.md) shows how.
 
-Each command runs once and stops. Nothing runs continuously.
-
-The evaluator prints its `execution_id`. Use it with [the generated-execution check](sql/15_check_generated_billing.sql). The [generated billing runbook](docs/02-runbook.md#evaluate-generated-batches-through-gold) explains the new tables, expected counts and failed-attempt checks.
-
-The generator writes charging events only. Python billing mocks create complete baseline and candidate CDRs later; Silver SQL calculates the expectation separately. Generated evidence uses 13 dedicated tables, keeping it separate from the original demo. Both paths together use **26 tables and six manually started jobs**.
-
-**Keep old files and results.** An earlier version mixed incomplete billing and tariff records into generated files. The evaluator rejects those files. Use a fresh batch name with the repaired event-only generator; do not overwrite files, delete landed evidence or reset the checkpoint. These remain synthetic mock bills, not real software release responses.
+Open the parent run's `evaluate_generated_batch` child job and use the `execution_id` from its notebook output with [the generated execution check](sql/15_check_generated_billing.sql).
 
 ## Local tests
-
-From the repository root, run:
 
 ```bash
 python -B -m unittest discover -s tests -q
 ```
 
-The tests cover billing behavior, assertions, verdict rules, execution tracking, session generation, file ingestion, complete generated-session coverage and saved-result consistency. They use local substitutes for parts of Databricks and Spark; workspace runs are still needed to verify the deployed pipeline.
+**241 local tests pass.** They cover generation, validation, billing, verdicts, session coverage, saved results and dashboard queries and wiring. Some use substitutes for Databricks and Spark, so workspace checks are still needed for deployment, repeat runs and recovery.
 
 ## Current status and next steps
 
-This is an independent public portfolio project and a working MVP using small synthetic cases. The current pricing model is a flat energy rate. It does not process real payments or yet test real baseline/candidate release builds.
+This is a working portfolio MVP using simulated data and a flat energy rate. It does not process real payments or yet test real software release builds.
 
-**Verified in Databricks:** the healthy billing checks, wrong-amount FAIL → corrected PASS examples, and a completed execution with seven saved scenario snapshots.
+**Confirmed in Databricks:** the original correct/wrong-amount examples, an execution with seven saved test results, and a generated Gold result with **2 sessions, 28 checks and all verdicts PASS**. The [generated-session guide](docs/03-generated-sessions.md#confirmed-result) records that result.
 
-**Implemented, with Databricks verification still to complete:** generated sessions through Gold, their healthy → faulty → healthy checks, unchanged counts on repeat ingestion, direct inspection of the missing-record snapshots, and interruption/recovery checks that prove an older PASS cannot hide a failed attempt.
+**Still to check:** the dashboard deployment and refresh, the new parent workflow, the generated job's completion record, its deliberate-error test, stable repeat runs, recovery after interruption and the original missing-bill results.
 
-The next milestones are:
-
-1. **Verify the complete generated path:** check two sessions through Gold, the deliberate amount error, stable reruns and failed-attempt blocking in Databricks.
-2. **Handle broader incoming data:** add a place to review rejected records, more input formats, late-event rules and tested recovery/backfill procedures.
-3. **Broaden the billing scenarios:** add duplicate records, wrong energy, wrong tariffs and retry failures.
-4. **Test real releases:** replace mocks with external release replay and add GitHub checks tied to the exact Databricks execution.
-5. **Measure the pipeline:** publish throughput, runtime and cost results from repeatable workloads.
-
-The [remaining-work reference](docs/02-runbook.md#remaining-mvp-work) tracks the detailed gaps and acceptance checks.
+Next steps are to finish those checks, support more incoming data and billing cases, test real releases, and add GitHub release checks. Runtime, cost and throughput measurements are also planned. The [remaining-work list](docs/02-runbook.md#remaining-mvp-work) tracks the details.
 
 ## Repository guide
 
 | Location | What it contains |
 | --- | --- |
-| [docs/OVERVIEW.pdf](docs/OVERVIEW.pdf) | Original MVP brief: the business problem, proposed architecture, target scenarios and project scope. |
-| [docs/01-tables.md](docs/01-tables.md) | Short guide to the tables and their business purpose. |
-| [docs/02-runbook.md](docs/02-runbook.md) | Detailed table rules, setup, verification and remaining work. |
-| [databricks.yml](databricks.yml) | Bundle configuration and the development target. |
-| [resources/](resources/) | Schemas, managed Volume and job definitions. |
-| [sql/](sql/) | Original table definitions and checks; [sql/generated/](sql/generated/) holds the generated-batch transformations. |
-| [notebooks/](notebooks/) | Session generation, mock billing, execution tracking and file ingestion code. |
-| [data/ingestion_demo/](data/ingestion_demo/) | The two synthetic input files for the ingestion demo. |
-| [tests/](tests/) | Local automated checks. |
+| [MVP brief](docs/OVERVIEW.pdf) | Business problem and original planned scope. |
+| [Table guide](docs/01-tables.md) | What each table does and why it matters. |
+| [Runbook](docs/02-runbook.md) | Setup, data rules, verification and remaining work. |
+| [Generated-session guide](docs/03-generated-sessions.md) | Commands, expected results and a simple Gold query. |
+| [Dashboard guide](docs/04-dashboard.md) | Run simulations and inspect bills through the Databricks UI. |
+| [databricks.yml](databricks.yml) and [resources/](resources/) | Bundle configuration, schemas, Volume, jobs and dashboard. |
+| [sql/](sql/) | Table definitions, billing calculations and checks. |
+| [notebooks/](notebooks/) | Session generation, mock billing, ingestion and execution tracking. |
+| [data/ingestion_demo/](data/ingestion_demo/) | Sample files for the ingestion demo. |
+| [tests/](tests/) | Local automated tests. |
 
-Start with the [MVP brief](docs/OVERVIEW.pdf) for the original plan, the [table guide](docs/01-tables.md) for an overview, and the [runbook](docs/02-runbook.md) for implementation details. The PDF describes the target scope; it is not a claim that every planned feature is complete.
+The PDF describes the intended MVP scope. The guides distinguish what is built, what has been checked and what remains.

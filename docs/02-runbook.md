@@ -18,7 +18,7 @@ ChargeAssert uses managed Delta tables inside these Unity Catalog schemas:
 | Silver | `workspace.chargeassert_dev_silver` |
 | Gold | `workspace.chargeassert_dev_gold` |
 
-The repository defines **26 tables and six manual jobs**. The original thirteen tables cover the fifteen-task `create_tables` billing test job and shared `ocpp_events_landing` table. The new `evaluate_generated_batch` job has thirteen separate `generated_*` tables for a selected input batch. The remaining jobs are `generate_sessions`, `publish_ingestion_demo`, `ingest_ocpp_files` and `combined_ingestion`. The combined job starts generation, then calls the existing ingestion job; it does not run billing by itself.
+The repository defines **26 tables and seven manual jobs**. The original thirteen tables cover the fifteen-task `create_tables` billing test job and shared `ocpp_events_landing` table. `evaluate_generated_batch` has thirteen separate `generated_*` tables for a selected batch. `run_generated_pipeline` runs generation, ingestion and evaluation in order with one command. It adds no tables. The other jobs are `generate_sessions`, `publish_ingestion_demo`, `ingest_ocpp_files` and `combined_ingestion`; the last one runs generation and ingestion only.
 
 **Implemented means the code exists. It does not mean the latest version has been deployed or tested successfully in Databricks.**
 
@@ -336,30 +336,44 @@ The `evaluate_generated_batch` job completes the path from landed events to bill
 
 Its two job parameters are `batch_id` (default `sessions-repaired-001`) and `candidate_mode` (`healthy` by default, or `amount_error`). It allows one run at a time and stops when the batch is finished. It does not schedule more work or modify the source files, landing rows or Auto Loader checkpoint.
 
-For the short test guide, simple Gold query and recorded result, see [Generated sessions](03-generated-sessions.md).
+For the short test guide, simple Gold query and recorded result, see [Generated sessions](03-generated-sessions.md). To run and inspect results through the Databricks UI, use the [dashboard guide](04-dashboard.md). The bundle publishes the dashboard and adds an `ALL_SUCCESS` refresh task to the evaluator. It reads the exact saved execution ID from the evaluation task value. A billing FAIL still refreshes; an evaluation processing error skips refresh and keeps the job failed. Refresh the dashboard manually to inspect those failed attempts. Dashboard status covers that evaluation; the parent job remains the source for generation and ingestion failures.
+
+`run_generated_pipeline` is the parent job for the full flow. It calls `generate_sessions`, then `ingest_ocpp_files`, then `evaluate_generated_batch`, using [Run Job tasks](https://docs.databricks.com/aws/en/jobs/tasks/run-job). Both downstream steps require `ALL_SUCCESS`. It forwards `batch_id`, `session_count` and `seed` to generation, and the same `batch_id` plus `candidate_mode` to evaluation. It reuses the existing child jobs and their concurrency limits; it does not start a second checkpoint writer.
+
+Its defaults are `batch_id=sessions-{{job.run_id}}`, `session_count=100`, `seed=42` and `candidate_mode=amount_error`. The standalone generator and evaluator keep their own defaults; the parent passes its selected values to them. Databricks fills in the parent run ID using a [dynamic job parameter](https://docs.databricks.com/aws/en/jobs/dynamic-value-references). Generation and evaluation receive that same name. Each new full run gets new session IDs; the seed keeps the usage values repeatable. You can find the batch name in the parent run's parameters.
+
+After deployment, run with the defaults:
+
+```bash
+databricks bundle run -t dev run_generated_pipeline
+```
+
+This creates 100 sessions and 300 events. The candidate overcharges each session by EUR 0.87. Expect 1,400 checks: **1,300 PASS and 100 FAIL**, with baseline PASS, candidate FAIL and overall FAIL. The job should still succeed because it detected and saved the errors.
+
+Use `--params candidate_mode=healthy` for correct bills and 1,400 PASS checks, or `--params session_count=10` for a smaller batch. Combine overrides with commas, for example `--params candidate_mode=healthy,session_count=10,seed=123`. Session counts must be 1-1,000; seeds must be 0-4,294,967,295. Omitted values keep their defaults.
+
+To reuse a batch, set `batch_id` explicitly and keep its count and seed unchanged. Otherwise, repeating the command creates a new batch. The parent allows one run at a time and has no schedule. Avoid overlapping it with other publishing or ingestion commands: a busy child job can be skipped, and job limits do not coordinate manual writers.
+
+The evaluator keeps its own execution identity. Open the parent's evaluation task, then the child run and its notebook output, to find the saved `execution_id`. Check the parent completed successfully before using that child's Gold result. A failure before evaluation creates no new evaluator receipt or snapshot; an older PASS cannot stand in for it. Start a new complete run after resolving a failure. The new parent workflow still needs Databricks verification.
 
 #### Fresh batch, healthy result, deliberate error
 
-Run these commands from the updated repository after authentication. Wait for each command to succeed:
+This comparison uses an explicit batch name so all three runs check the same sessions. Choose a fresh name and use it throughout the commands and SQL below. Run from the updated repository after authentication and wait for each command to succeed:
 
 ```bash
 git switch dev
 git pull --ff-only origin dev
 databricks bundle validate -t dev
 databricks bundle deploy -t dev
-databricks bundle run -t dev combined_ingestion --params batch_id=sessions-repaired-001,session_count=2,seed=42
-databricks bundle run -t dev evaluate_generated_batch --params batch_id=sessions-repaired-001,candidate_mode=healthy
+databricks bundle run -t dev run_generated_pipeline --params batch_id=sessions-pipeline-001,session_count=2,seed=42,candidate_mode=healthy
 ```
 
-The last two commands do the following:
-
-- **Create and load sessions:** `combined_ingestion` generates two simulated charging sessions and uses Auto Loader to load their six events into Bronze. `seed=42` makes the data repeatable.
-- **Check correct billing:** `evaluate_generated_batch` with `candidate_mode=healthy` calculates the expected charges, compares both simulated billing versions and saves the checks in Gold. Expect **28 PASS checks**, with baseline, candidate and overall PASS.
+The last command generates two sessions, loads their six events into Bronze and checks their bills through Gold. `seed=42` makes the data repeatable. Expect **28 PASS checks**, with baseline, candidate and overall PASS.
 
 **Test whether bad billing is caught.** Use the same sessions with deliberately wrong candidate bills:
 
 ```bash
-databricks bundle run -t dev evaluate_generated_batch --params batch_id=sessions-repaired-001,candidate_mode=amount_error
+databricks bundle run -t dev run_generated_pipeline --params batch_id=sessions-pipeline-001,session_count=2,seed=42,candidate_mode=amount_error
 ```
 
 This adds EUR 0.87 to each candidate bill. Expect **26 PASS / 2 FAIL / 0 BLOCKED**: one incorrect charge caught per session. Baseline stays PASS; candidate and overall become FAIL. Only the two candidate `amount_match` checks should fail. The job itself should succeed because it detected and saved the errors.
@@ -369,20 +383,20 @@ Each command runs once and stops. Nothing runs continuously.
 Run the healthy evaluation again:
 
 ```bash
-databricks bundle run -t dev evaluate_generated_batch --params batch_id=sessions-repaired-001,candidate_mode=healthy
+databricks bundle run -t dev run_generated_pipeline --params batch_id=sessions-pipeline-001,session_count=2,seed=42,candidate_mode=healthy
 ```
 
 Expect 28 PASS checks under a new execution ID. The healthy session and billing rows keep the same keys; the new attempt adds its own execution record and snapshot. The earlier faulty verdict remains available under its own evaluation run ID.
 
 #### Read the exact generated execution
 
-The evaluator prints its `execution_id`, `run_id`, session count, assertion count and financial verdicts. You can also find the matching attempt in SQL:
+The evaluator prints its `execution_id`, `run_id`, session count, assertion count and financial verdicts. You can also find the matching attempt in SQL. For an automatically named batch, replace the name below with the batch name from the parent run parameters:
 
 ```sql
 SELECT execution_id, batch_id, candidate_mode, run_id,
        started_at, finished_at, status, reason
 FROM workspace.chargeassert_dev_bronze.generated_job_execution
-WHERE batch_id = 'sessions-repaired-001'
+WHERE batch_id = 'sessions-pipeline-001'
 ORDER BY started_at DESC;
 ```
 
@@ -538,7 +552,7 @@ Earlier completed snapshots with five scenarios can still be read by their exact
 
 Gold turns the billing comparisons into findings a business team can act on. An amount mismatch can flag a potential customer overcharge. A missing billing record can flag a potentially unbilled session. The results show what failed and keep the evidence needed to investigate it and review a release.
 
-Gold stores the detailed checks, current scenario verdicts and saved execution snapshots that the pipeline does not overwrite. It supports a human release decision today. The automated GitHub release check and a dashboard are future work; Gold does not yet report total customer overbilling or operator revenue loss.
+Gold stores the detailed checks, current scenario verdicts and saved execution snapshots that the pipeline does not overwrite. It supports a human release decision today. The generated results now have a bundle-managed [dashboard](04-dashboard.md). The automated GitHub release check remains future work; Gold does not yet report total customer overbilling or operator revenue loss.
 
 | Table | Status | One row represents | Important fields |
 | --- | --- | --- | --- |
