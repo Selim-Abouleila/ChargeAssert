@@ -18,7 +18,7 @@ ChargeAssert uses managed Delta tables inside these Unity Catalog schemas:
 | Silver | `workspace.chargeassert_dev_silver` |
 | Gold | `workspace.chargeassert_dev_gold` |
 
-The repository defines **26 tables and seven manual jobs**. The original thirteen tables cover the fifteen-task `create_tables` billing test job and shared `ocpp_events_landing` table. `evaluate_generated_batch` has thirteen separate `generated_*` tables for a selected batch. `run_generated_pipeline` runs generation, ingestion and evaluation in order with one command. It adds no tables. The other jobs are `generate_sessions`, `publish_ingestion_demo`, `ingest_ocpp_files` and `combined_ingestion`; the last one runs generation and ingestion only.
+The repository defines **26 tables, seven pipeline jobs and one app setup job**. The original thirteen tables cover the fifteen-task `create_tables` billing test job and shared `ocpp_events_landing` table. `evaluate_generated_batch` has thirteen separate `generated_*` tables for a selected batch. `run_generated_pipeline` runs generation, ingestion and evaluation in order with one command. It adds no tables. The `setup_simulation_app` job grants the [simulation app](06-simulation-app.md) read access to saved results. The other jobs are `generate_sessions`, `publish_ingestion_demo`, `ingest_ocpp_files` and `combined_ingestion`; the last one runs generation and ingestion only.
 
 **Implemented means the code exists. It does not mean the latest version has been deployed or tested successfully in Databricks.**
 

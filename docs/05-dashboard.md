@@ -27,6 +27,8 @@ The bundle creates and publishes the dashboard automatically, using the existing
 
 ## Run a simulation
 
+To choose settings and see results on one page, use the [simulation app](06-simulation-app.md). The dashboard remains available for reviewing saved results.
+
 Open **Jobs & Pipelines**, select `chargeassert_dev_run_generated_pipeline` and click **Run now**. The defaults create 100 sessions with deliberately incorrect candidate bills. The dropdown beside Run now lets you change `session_count`, `seed` or `candidate_mode`.
 
 You can also start the same job from the terminal:

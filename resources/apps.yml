@@ -1,0 +1,56 @@
+resources:
+  apps:
+    simulation_app:
+      name: chargeassert-dev-simulation
+      description: Run charging simulations and inspect their saved billing results.
+      source_code_path: ../app
+      resources:
+        - name: pipeline-job
+          job:
+            id: ${resources.jobs.run_generated_pipeline.id}
+            permission: CAN_MANAGE_RUN
+        - name: evaluator-job
+          job:
+            id: ${resources.jobs.evaluate_generated_batch.id}
+            permission: CAN_VIEW
+        - name: sql-warehouse
+          sql_warehouse:
+            id: ${var.warehouse_id}
+            permission: CAN_USE
+      # The bundle supplies runtime settings with resolved resource IDs.
+      config:
+        command:
+          - gunicorn
+          - --bind
+          - 0.0.0.0:$DATABRICKS_APP_PORT
+          - --workers
+          - "1"
+          - --threads
+          - "4"
+          - --timeout
+          - "120"
+          - app:app
+        env:
+          - name: PIPELINE_JOB_ID
+            value_from: pipeline-job
+          - name: EVALUATOR_JOB_ID
+            value_from: evaluator-job
+          - name: SQL_WAREHOUSE_ID
+            value_from: sql-warehouse
+          - name: CATALOG_NAME
+            value: ${var.catalog_name}
+          - name: DASHBOARD_ID
+            value: ${resources.dashboards.generated_billing.id}
+
+  jobs:
+    setup_simulation_app:
+      name: chargeassert_dev_setup_simulation_app
+      description: Grant the app read access to the two saved-result tables after they exist.
+      max_concurrent_runs: 1
+      tasks:
+        - task_key: grant_result_access
+          notebook_task:
+            notebook_path: ../notebooks/setup_simulation_app.py
+            base_parameters:
+              catalog_name: ${var.catalog_name}
+              app_principal: ${resources.apps.simulation_app.service_principal_client_id}

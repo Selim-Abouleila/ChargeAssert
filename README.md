@@ -152,6 +152,8 @@ The [ingestion walkthrough](docs/03-runbook.md#incremental-ocpp-file-ingestion) 
 
 ## Generate sessions and check their bills
 
+For controls and results on one page, use the [simulation app](docs/06-simulation-app.md). Choose a billing mode and session count, run the pipeline, then inspect its progress and saved results. The guide covers deployment.
+
 The [generated-session guide](docs/04-generated-sessions.md) covers this path from start to finish. Deployment also creates a [results dashboard](docs/05-dashboard.md): use the job's **Run now** button, then read the refreshed billing results without writing SQL.
 
 After deployment, run the whole pipeline with its defaults: **100 simulated sessions**, seed `42` and deliberately incorrect candidate bills. It picks a new batch name automatically:
@@ -178,7 +180,7 @@ Open the parent run's `evaluate_generated_batch` child job and use the `executio
 python -B -m unittest discover -s tests -q
 ```
 
-**241 local tests pass.** They cover generation, validation, billing, verdicts, session coverage, saved results and dashboard queries and wiring. Some use substitutes for Databricks and Spark, so workspace checks are still needed for deployment, repeat runs and recovery.
+Local tests cover generation, validation, billing, verdicts, session coverage, saved results and dashboard queries and wiring. Install `app/requirements.txt` to include the app route tests. Some tests use substitutes for Databricks and Spark, so workspace checks are still needed for deployment, repeat runs and recovery.
 
 ## Current status and next steps
 
@@ -199,8 +201,10 @@ Next steps are to finish those checks, support more incoming data and billing ca
 | [03 — Runbook](docs/03-runbook.md) | Setup, data rules, verification and remaining work. |
 | [04 — Generated-session guide](docs/04-generated-sessions.md) | Commands, expected results and a simple Gold query. |
 | [05 — Dashboard guide](docs/05-dashboard.md) | Run simulations and inspect bills through the Databricks UI. |
+| [06 — Simulation app](docs/06-simulation-app.md) | Choose settings, run simulations and read their results on one page. |
 | [databricks.yml](databricks.yml) and [resources/](resources/) | Bundle configuration, schemas, Volume, jobs and dashboard. |
 | [sql/](sql/) | Table definitions, billing calculations and checks. |
+| [app/](app/) | The interactive simulation app. |
 | [notebooks/](notebooks/) | Session generation, mock billing, ingestion and execution tracking. |
 | [data/ingestion_demo/](data/ingestion_demo/) | Sample files for the ingestion demo. |
 | [tests/](tests/) | Local automated tests. |
