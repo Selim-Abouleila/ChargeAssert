@@ -1,6 +1,6 @@
 """Build the committed native AI/BI dashboard; only Python's stdlib is needed.
 
-Run with --check to detect stale embedded SQL without changing files.
+Run with --check to detect stale embedded SQL or layout without changing files.
 Widget/filter shapes follow Databricks' published dashboard examples:
 https://github.com/databricks/databricks-agent-skills/tree/main/plugins/databricks/claude/skills/databricks-aibi-dashboards/references
 This checks the source asset, not live Databricks SQL execution or rendering.
@@ -13,6 +13,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / "dashboards" / "generated_billing.lvdash.json"
+LOGO_URL = (
+    "https://raw.githubusercontent.com/Selim-Abouleila/ChargeAssert/dev/"
+    "docs/images/chargeassert-logo.png"
+)
 DATASETS = {
     "execution_choices": "Available evaluations",
     "execution_summary": "Selected evaluation",
@@ -120,9 +124,14 @@ def build_dashboard():
         datasets.append(dataset)
 
     overview = [
+        # Public image URLs in Markdown text widgets are supported by Databricks:
+        # https://docs.databricks.com/aws/en/dashboards/manage/visualizations/text-widgets
+        place({"name": "brand_logo", "multilineTextboxSpec": {
+            "lines": [f"![ChargeAssert]({LOGO_URL})"],
+        }}, 0, 0, 3, 2),
         place(text_widget("overview_header", "ChargeAssert | Billing checks",
             "Catch incorrect charging bills before a billing release reaches drivers. "
-            "Compare the baseline with the candidate using the same simulated sessions."), 0, 0, 12, 2),
+            "Compare the baseline with the candidate using the same simulated sessions."), 3, 0, 9, 2),
         place(text_widget("scope", "Read the result in context",
             "**latest** means the latest evaluation attempt, including failed attempts. "
             "It may not be the latest pipeline run: a run can fail before evaluation starts. "

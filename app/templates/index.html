@@ -8,7 +8,7 @@
 </head>
 <body>
   <div id="preview-banner" class="preview-banner" hidden>LOCAL PREVIEW · Sample data only. No Databricks jobs are started.</div>
-  <header class="topbar"><div class="brand"><span class="brand-mark" aria-hidden="true">C<span>+</span></span><span>ChargeAssert</span><span class="environment">DEV</span></div><a id="dashboard-link" class="text-link" target="_blank" rel="noopener noreferrer" hidden>Open full dashboard <span aria-hidden="true">↗</span></a></header>
+  <header class="topbar"><div class="brand"><img class="brand-logo" src="{{ url_for('static', filename='images/chargeassert-logo.png') }}" alt="ChargeAssert" width="240" height="50"><span class="environment">DEV</span></div><a id="dashboard-link" class="text-link" target="_blank" rel="noopener noreferrer" hidden>Open full dashboard <span aria-hidden="true">↗</span></a></header>
   <main>
     <div class="intro"><div><p class="eyebrow">BILLING RELEASE CHECKS</p><h1>Catch billing errors.<br><span>Before drivers do.</span></h1><p class="intro-copy">Run the same charging sessions through two billing versions.<br class="desktop-break"> See whether the next release gets the bills right.</p></div><div class="intro-note"><span class="small-dot"></span>Generate → load → check<p>One simulation. Saved, traceable results.</p></div></div>
     <div id="page-message" class="notice error" role="alert" hidden></div>

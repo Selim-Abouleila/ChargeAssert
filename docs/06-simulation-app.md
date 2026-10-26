@@ -2,7 +2,7 @@
 
 Choose settings, run a simulation and read its billing results on one page. The app uses the existing Lakeflow pipeline and the same saved evidence as the dashboard.
 
-![Local preview of the ChargeAssert app with controls, progress, billing decisions and session bills.](images/simulation-app-preview.jpg)
+![Local preview of the ChargeAssert app with controls, progress, billing decisions and session bills.](images/simulation-app-logo-preview.jpg)
 
 *Local preview with sample data. This is a UI check, not a live Databricks result.*
 
@@ -20,7 +20,7 @@ databricks bundle run -t dev simulation_app
 databricks bundle summary -t dev
 ```
 
-Open the **simulation_app** URL from the summary, or find **chargeassert-dev-simulation** under **Compute → Apps** in Databricks.
+Open the **simulation_app** URL from the summary, or find **chargeassert-dev-simulation** through the **app switcher → Databricks Apps** in Databricks.
 
 - `deploy` creates the app resource, connects it to the jobs and warehouse, and uploads its code.
 - `setup_simulation_app` gives the app read access to the two saved-result tables. Run it once after the app is created, and again if those tables or the app are recreated. It does not change any data.
@@ -80,7 +80,9 @@ python -B -m unittest discover -s tests
 python -B scripts/build_app_assets.py --check
 ```
 
-If you change the shared dashboard SQL, run `python -B scripts/build_app_assets.py` to update the app's packaged copies, and rebuild the dashboard with `python -B scripts/build_dashboard.py`.
+The app header uses the [ChargeAssert logo](images/chargeassert-logo.png), kept in `docs/images` and packaged with the app.
+
+If you change the shared dashboard SQL or logo, run `python -B scripts/build_app_assets.py` to update the app's packaged copies, and rebuild the dashboard with `python -B scripts/build_dashboard.py`.
 
 The first version has local checks and a local preview. Live app authentication, permissions and full execution still need verification after deployment.
 

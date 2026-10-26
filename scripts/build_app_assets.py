@@ -1,4 +1,4 @@
-"""Package the dashboard SQL with the app so both read the same saved evidence."""
+"""Package the shared dashboard SQL and ChargeAssert logo with the app."""
 
 import argparse
 from pathlib import Path
@@ -20,9 +20,17 @@ def build(check=False):
         else:
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(source.read_bytes())
+    logo_source = ROOT / "docs" / "images" / "chargeassert-logo.png"
+    logo_target = ROOT / "app" / "static" / "images" / logo_source.name
+    if check:
+        if not logo_target.exists() or logo_target.read_bytes() != logo_source.read_bytes():
+            stale.append(logo_source.name)
+    else:
+        logo_target.parent.mkdir(parents=True, exist_ok=True)
+        logo_target.write_bytes(logo_source.read_bytes())
     if stale:
-        raise SystemExit("App SQL is stale; run python scripts/build_app_assets.py: " + ", ".join(stale))
-    print("App SQL matches the dashboard queries." if check else "Packaged dashboard SQL for the app.")
+        raise SystemExit("App assets are stale; run python scripts/build_app_assets.py: " + ", ".join(stale))
+    print("App assets match the shared SQL and logo." if check else "Packaged dashboard SQL and logo for the app.")
 
 
 if __name__ == "__main__":

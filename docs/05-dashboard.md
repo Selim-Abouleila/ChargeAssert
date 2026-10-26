@@ -4,7 +4,7 @@ The bundle creates the job and a published dashboard. After deployment, you can 
 
 ![ChargeAssert dashboard showing 100 sessions, 1,300 passed checks, 100 failed checks, no blocked checks and a successful evaluation.](images/generated-billing-dashboard-2026-10-15.png)
 
-*Live `amount_error` result on 2026-10-15: evaluation succeeded, baseline billing passed, and the deliberately incorrect candidate bills failed.*
+*Screenshot taken before the logo was added. Live `amount_error` result on 2026-10-15: evaluation succeeded, baseline billing passed, and the deliberately incorrect candidate bills failed.*
 
 ## Deploy once after pulling changes
 
@@ -65,6 +65,7 @@ Before the first evaluation creates its tables, dashboard queries cannot return 
 
 - [Dashboard resource](../resources/dashboards.yml): display name, warehouse and catalog settings. Deployment publishes the dashboard without sharing the deployer's data permissions; viewers use their own access.
 - [Job definition](../resources/generated_billing.yml): the evaluation and dashboard refresh tasks.
+- [ChargeAssert logo](images/chargeassert-logo.png): shared branding for the app and dashboard headers. The dashboard loads the PNG from this repository on GitHub.
 - [Dashboard asset](../dashboards/generated_billing.lvdash.json): native dashboard pages, widgets and datasets.
 - [Dataset SQL](../sql/dashboard/): selection and checks for saved results. No new tables are added.
 - [Build script](../scripts/build_dashboard.py): rebuilds the committed dashboard asset after SQL or layout changes. Users only need to deploy it.
