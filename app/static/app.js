@@ -126,7 +126,7 @@
         badge($("candidate-verdict"), summary.candidate_verdict);
         badge($("overall-verdict"), summary.verdict);
         $("metric-failed").classList.toggle("has-failures", Number(summary.failed_checks) > 0);
-        setText("decision-explanation", summary.usable ? (summary.verdict === "PASS" ? "Both billing versions passed all required checks for these sessions." : "The checks caught a billing difference. Review the failed bills below before approving this candidate.") : "Billing results are blocked because the saved evidence is incomplete or inconsistent.");
+        setText("decision-explanation", summary.usable ? (summary.verdict === "PASS" ? "Both billing versions passed every required check." : "Billing differences found. Review the failed bills before release.") : "Billing results are blocked because the saved evidence is incomplete or inconsistent.");
       } else {
         ["baseline", "candidate", "overall"].forEach((key) => badge($(`${key}-verdict`), "BLOCKED"));
         setText("decision-explanation", "There is no trusted billing result for this run yet.");
@@ -158,7 +158,7 @@
       values.forEach((value, index) => { const td = document.createElement("td"); td.textContent = value || "—"; if (index === 0) td.title = String(value || ""); if (index >= 2) td.className = "number"; if (index === 4 && Number(row.difference) !== 0 && row.difference != null) td.classList.add("difference-positive"); tr.append(td); });
       const td = document.createElement("td"); const status = document.createElement("span"); badge(status, row.verdict); td.append(status); tr.append(td); body.append(tr);
     });
-    setText("bill-count", `${number.format(rows.length)} bills${rows.length > state.shown ? ` · Showing ${state.shown}` : ""} · One row per session and billing version`);
+    setText("bill-count", `${number.format(rows.length)} bills${rows.length > state.shown ? ` · Showing ${state.shown}` : ""}`);
     $("bills-empty").hidden = rows.length > 0; $("show-more").hidden = rows.length <= state.shown;
   }
   async function startRun(event) {
@@ -182,7 +182,7 @@
       showMessage("page-message", error.message + (state.launch ? " The start outcome is unknown. Retry with the same settings and request ID to avoid creating a second run." : ""), "error");
     } finally {
       state.starting = false; $("settings").disabled = !!state.launch; $("run-button").disabled = false;
-      $("run-button").textContent = state.launch ? "Retry start request" : "▶  Run simulation";
+      $("run-button").textContent = state.launch ? "Retry start request" : "Run simulation";
     }
   }
   $("run-form").addEventListener("submit", startRun);
@@ -190,13 +190,18 @@
   $("refresh-results").addEventListener("click", () => loadResults());
   ["role-filter", "verdict-filter"].forEach((id) => $(id).addEventListener("change", () => { state.shown = 50; renderBills(); }));
   $("show-more").addEventListener("click", () => { state.shown += 50; renderBills(); });
-  $("candidate-mode").addEventListener("change", () => setText("mode-help", $("candidate-mode").value === "healthy" ? "Both billing versions should match the expected charges." : "Add €0.87 to each candidate bill to test that errors are caught."));
+  function updateModeHelp() {
+    setText("mode-help", $("candidate-mode").value === "healthy" ? "Both versions should match the expected charges." : "Adds €0.87 to each candidate bill.");
+  }
+  $("candidate-mode").addEventListener("change", updateModeHelp);
+  $("seed").addEventListener("invalid", () => { $("seed").closest("details").open = true; });
   async function initialize() {
     try {
       state.config = await api("/api/config");
       $("preview-banner").hidden = !state.config.preview;
       const defaults = state.config.defaults;
       $("session-count").value = defaults.session_count; $("seed").value = defaults.seed; $("candidate-mode").value = defaults.candidate_mode;
+      updateModeHelp();
       $("session-count").max = state.config.limits.session_count; $("seed").max = state.config.limits.seed;
       $("settings").disabled = false; $("run-button").disabled = false; setLink("dashboard-link", state.config.dashboard_url);
       await loadHistory();

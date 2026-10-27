@@ -2,7 +2,7 @@
 
 Choose settings, run a simulation and read its billing results on one page. The app uses the existing Lakeflow pipeline and the same saved evidence as the dashboard.
 
-![Local preview of the ChargeAssert app with controls, progress, billing decisions and session bills.](images/simulation-app-logo-preview.jpg)
+![Local preview of the ChargeAssert app with controls, progress, billing decisions and session bills.](images/simulation-app-minimal-preview.jpg)
 
 *Local preview with sample data. This is a UI check, not a live Databricks result.*
 
@@ -39,10 +39,10 @@ For later code updates, pull, validate and deploy the bundle, then run `simulati
 ## Try it
 
 1. Choose **Healthy bills** or **Deliberate overcharges**.
-2. Set the session count: **100** by default, from **1 to 1,000**. The optional seed defaults to **42**; the same seed repeats the usage values.
+2. Set the session count: **100** by default, from **1 to 1,000**. Open **Options & help** to change the seed (default **42**); the same seed repeats the usage values.
 3. Click **Run simulation**. Each new run gets a fresh batch name.
 4. Watch generation, ingestion and evaluation finish.
-5. Read the billing decision, check counts and session bills below the controls.
+5. Read the billing decision, check counts and session bills below the controls. **Run details** shows the run and evaluation IDs.
 
 For 100 sessions, correct bills should give **1,400 passed checks** and all verdicts PASS. Deliberate overcharges add **EUR 0.87** to every candidate bill: expect **1,300 passed checks, 100 failed checks**, baseline PASS and candidate/overall FAIL.
 
@@ -79,6 +79,8 @@ Open the local URL printed in the terminal. The preview is clearly labelled and 
 python -B -m unittest discover -s tests
 python -B scripts/build_app_assets.py --check
 ```
+
+The interface uses plain HTML, CSS and JavaScript with system fonts. It adds no frontend framework or external font downloads.
 
 The app header uses the [ChargeAssert logo](images/chargeassert-logo.png), kept in `docs/images` and packaged with the app.
 
