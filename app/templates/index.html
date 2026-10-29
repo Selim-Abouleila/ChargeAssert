@@ -5,95 +5,62 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>ChargeAssert · Billing simulations</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <script src="{{ url_for('static', filename='outcome.js') }}" defer></script>
   <script src="{{ url_for('static', filename='app.js') }}" defer></script>
 </head>
 <body>
   <div id="preview-banner" class="preview-banner" hidden>LOCAL PREVIEW · Sample data only. No Databricks jobs are started.</div>
   <header class="topbar">
-    <div class="brand">
-      <img class="brand-logo" src="{{ url_for('static', filename='images/chargeassert-logo.png') }}" alt="ChargeAssert" width="208" height="44">
-      <span class="environment">Dev</span>
-    </div>
-    <a id="dashboard-link" class="text-link" target="_blank" rel="noopener noreferrer" hidden>Full dashboard <span aria-hidden="true">↗</span></a>
+    <img class="brand-logo" src="{{ url_for('static', filename='images/chargeassert-logo.png') }}" alt="ChargeAssert" width="196" height="42">
+    <button id="history-button" class="quiet-button" type="button" disabled>Past runs</button>
   </header>
   <main>
-    <div class="page-heading">
-      <h1>Billing simulations</h1>
-      <p>Check charging bills before a release reaches drivers.</p>
-    </div>
     <div id="page-message" class="notice error" role="alert" hidden></div>
-    <section class="controls panel" aria-labelledby="setup-title">
-      <div class="controls-heading"><h2 id="setup-title">New simulation</h2><span>New batch with every run</span></div>
-      <form id="run-form">
+    <section id="setup-view" class="setup-view" aria-labelledby="setup-title">
+      <div class="page-heading"><h1 id="setup-title" tabindex="-1">Check your charging bills.</h1><p>Test a billing release before it reaches drivers.</p></div>
+      <form id="run-form" class="setup-card">
         <fieldset id="settings" disabled>
           <legend class="sr-only">Simulation settings</legend>
-          <div class="input-row">
-            <div class="mode-field">
-              <label for="candidate-mode">Candidate billing</label>
-              <select id="candidate-mode" name="candidate_mode" aria-describedby="mode-help"><option value="amount_error">Deliberate overcharges</option><option value="healthy">Healthy bills</option></select>
-            </div>
-            <div class="count-field">
-              <label for="session-count">Charging sessions</label>
-              <input id="session-count" name="session_count" type="number" min="1" max="1000" value="100" required aria-describedby="count-help">
-            </div>
-          </div>
+          <label for="candidate-mode">What would you like to test?</label>
+          <select id="candidate-mode" name="candidate_mode" aria-describedby="mode-help"><option value="amount_error">Deliberate overcharges</option><option value="healthy">Healthy bills</option></select>
           <p id="mode-help" class="field-help">Adds €0.87 to each candidate bill.</p>
-          <details class="advanced">
-            <summary>Options &amp; help</summary>
-            <div class="options-content">
-              <div><label for="seed">Random seed</label><input id="seed" name="seed" type="number" min="0" max="4294967295" value="42" aria-describedby="seed-help"><p id="seed-help" class="field-help">The same seed repeats the usage values.</p></div>
-              <div class="options-help"><p><strong>Baseline</strong> is the reference bill. <strong>Candidate</strong> is the version you are testing.</p><p id="count-help">Choose 1–1,000 sessions. Runs use Databricks compute and stop when finished.</p></div>
-            </div>
-          </details>
+          <div class="count-row"><div><label for="session-count">Charging sessions</label><span id="count-help" class="field-help">1–1,000 sessions</span></div><input id="session-count" name="session_count" type="number" min="1" max="1000" value="100" required aria-describedby="count-help"></div>
+          <details class="advanced"><summary>Advanced settings</summary><div class="advanced-content"><label for="seed">Random seed</label><input id="seed" name="seed" type="number" min="0" max="4294967295" value="42" aria-describedby="seed-help"><p id="seed-help" class="field-help">The same seed repeats the usage values in a new batch.</p></div></details>
         </fieldset>
         <button id="run-button" type="submit" class="primary-button" disabled>Run simulation</button>
+        <p class="run-note">Each run creates a new batch and uses Databricks compute.</p>
       </form>
     </section>
-    <section class="results-area" aria-labelledby="results-title">
-      <div class="results-toolbar">
-        <h2 id="results-title">Results</h2>
-        <div class="history-control"><label for="run-history">Saved runs</label><select id="run-history" disabled><option value="">Choose a run</option></select></div>
+    <section id="selected-run" class="selected-run" aria-labelledby="outcome-title" hidden>
+      <div class="result-navigation"><button id="new-simulation" class="quiet-button" type="button">← New simulation</button><p id="selected-context" class="muted"></p></div>
+      <div id="outcome-card" class="outcome-card" data-tone="neutral">
+        <span id="outcome-symbol" class="outcome-symbol" aria-hidden="true">…</span>
+        <h1 id="outcome-title" tabindex="-1">Loading simulation</h1>
+        <p id="outcome-description" class="outcome-description" role="status" aria-live="polite"></p>
+        <p id="result-brief" class="result-brief" hidden></p>
+        <div class="outcome-actions"><button id="review-bills" type="button" class="primary-button" aria-expanded="false" aria-controls="bills-panel" hidden>View bills</button><button id="refresh-results" type="button" class="quiet-button" hidden>Refresh results</button></div>
       </div>
-      <div id="empty-state" class="empty-state">
-        <span class="empty-icon" aria-hidden="true">✓</span>
-        <h3>Ready when you are.</h3>
-        <p>Run a simulation or choose a saved run.<br>Your billing checks will appear here.</p>
-      </div>
-      <div id="selected-run" hidden>
-        <section class="run-status" aria-labelledby="progress-title">
-          <div class="run-overview">
-            <div class="run-heading"><div class="status-title"><h3 id="progress-title">Pipeline</h3><span id="pipeline-status" class="badge neutral" role="status" aria-live="polite">Loading</span></div><p id="run-description" class="muted"></p></div>
-            <div id="steps" class="steps" aria-label="Pipeline steps"></div>
-          </div>
-          <details class="run-details"><summary>Run details</summary><div class="run-meta"><span id="run-id"></span><a id="job-link" class="text-link" target="_blank" rel="noopener noreferrer" hidden>View job run ↗</a></div><p id="evidence-id" class="evidence-id"></p></details>
-        </section>
-        <div id="result-message" class="notice" role="status" hidden></div>
-        <section id="billing-results" hidden aria-label="Saved billing results">
-          <div class="summary-panel panel">
-            <div class="section-top"><h3>Billing checks</h3><button id="refresh-results" class="quiet-button" type="button">Refresh results</button></div>
-            <div class="metrics">
-              <div class="metric"><span>Sessions</span><strong id="metric-sessions">—</strong></div>
-              <div class="metric"><span>Checks passed</span><strong id="metric-passed">—</strong></div>
-              <div class="metric"><span>Checks failed</span><strong id="metric-failed">—</strong></div>
-              <div class="metric"><span>Checks blocked</span><strong id="metric-blocked">—</strong></div>
-            </div>
-            <div class="decision-card">
-              <div class="overall-decision"><span>Overall</span><span id="overall-verdict" class="badge neutral">—</span></div>
-              <div><span>Baseline</span><span id="baseline-verdict" class="badge neutral">—</span></div>
-              <div><span>Candidate</span><span id="candidate-verdict" class="badge neutral">—</span></div>
-            </div>
-            <p id="decision-explanation" class="decision-explanation"></p>
-          </div>
-          <section class="bills-section" aria-labelledby="bills-title">
-            <div class="bill-heading"><div><h3 id="bills-title">Session bills</h3><p id="bill-count" class="muted"></p></div><div class="bill-filters"><label class="sr-only" for="role-filter">Billing version</label><select id="role-filter"><option value="all">Both versions</option><option value="candidate">Candidate only</option><option value="baseline">Baseline only</option></select><label class="sr-only" for="verdict-filter">Bill result</label><select id="verdict-filter"><option value="all">All results</option><option value="FAIL">Failed bills</option><option value="PASS">Passed bills</option><option value="BLOCKED">Blocked bills</option></select></div></div>
-            <div class="table-scroll" tabindex="0" role="region" aria-label="Session bills table"><table><caption class="sr-only">One row per charging session and billing version.</caption><thead><tr><th scope="col">Session</th><th scope="col">Version</th><th scope="col" class="number">Expected</th><th scope="col" class="number">Actual</th><th scope="col" class="number">Difference</th><th scope="col">Result</th></tr></thead><tbody id="bills-body"></tbody></table></div>
-            <p id="bills-empty" class="table-empty" hidden>No bills match these filters.</p>
-            <div class="table-footer"><span>Expected charges use session data and tariffs.</span><button id="show-more" type="button" class="quiet-button" hidden>Show more bills</button></div>
+      <div id="result-message" class="notice" role="status" hidden></div>
+      <details id="view-details" class="view-details">
+        <summary>View check &amp; run details</summary>
+        <div class="details-content">
+          <section id="billing-results" aria-label="Saved billing results" hidden>
+            <div class="metrics"><div><span>Sessions</span><strong id="metric-sessions">—</strong></div><div><span>Passed checks</span><strong id="metric-passed">—</strong></div><div><span>Failed checks</span><strong id="metric-failed">—</strong></div><div><span>Blocked checks</span><strong id="metric-blocked">—</strong></div></div>
+            <div class="decisions"><div><span>Overall billing</span><span id="overall-verdict" class="badge neutral">—</span></div><div><span>Baseline</span><span id="baseline-verdict" class="badge neutral">—</span></div><div><span>Candidate</span><span id="candidate-verdict" class="badge neutral">—</span></div></div>
+            <p class="field-help">Baseline is the reference bill. Candidate is the version being tested.</p>
           </section>
-        </section>
-      </div>
+          <section class="run-details" aria-label="Pipeline details"><div class="section-top"><h2>Pipeline</h2><span id="pipeline-status" class="badge neutral">Loading</span></div><p id="run-description" class="muted"></p><div id="steps" class="steps" aria-label="Pipeline steps"></div><p id="run-id" class="identifier"></p><p id="evidence-id" class="identifier"></p><p id="evidence-note" class="identifier"></p><div class="detail-links"><a id="job-link" class="text-link" target="_blank" rel="noopener noreferrer" hidden>Open job run ↗</a><a id="dashboard-link" class="text-link" target="_blank" rel="noopener noreferrer" hidden>Full dashboard ↗</a></div></section>
+        </div>
+      </details>
     </section>
-    <footer><span>ChargeAssert</span><span>Simulated sessions · Mock billing</span></footer>
+    <section id="bills-panel" class="bills-panel" aria-labelledby="bills-title" hidden>
+      <div class="bill-heading"><div><h2 id="bills-title" tabindex="-1">Session bills</h2><p id="bill-count" class="muted"></p></div><button id="close-bills" type="button" class="quiet-button">Hide bills</button></div>
+      <div class="bill-filters"><label class="sr-only" for="role-filter">Billing version</label><select id="role-filter"><option value="all">Both versions</option><option value="candidate">Candidate only</option><option value="baseline">Baseline only</option></select><label class="sr-only" for="verdict-filter">Bill result</label><select id="verdict-filter"><option value="all">All results</option><option value="FAIL">Failed bills</option><option value="PASS">Passed bills</option><option value="BLOCKED">Blocked bills</option></select></div>
+      <div class="table-scroll" tabindex="0" role="region" aria-label="Session bills table"><table><caption class="sr-only">One row per charging session and billing version.</caption><thead><tr><th scope="col">Session</th><th scope="col">Version</th><th scope="col" class="number">Expected</th><th scope="col" class="number">Actual</th><th scope="col" class="number">Difference</th><th scope="col">Result</th></tr></thead><tbody id="bills-body"></tbody></table></div>
+      <p id="bills-empty" class="table-empty" hidden>No bills match these filters.</p><div class="table-footer"><span>Expected charges use session data and tariffs.</span><button id="show-more" type="button" class="quiet-button" hidden>Show more bills</button></div>
+    </section>
+    <footer>Simulated sessions · Mock billing</footer>
   </main>
+  <dialog id="history-dialog" aria-labelledby="history-title"><div class="dialog-heading"><h2 id="history-title">Past runs</h2><button id="close-history" type="button" class="quiet-button" aria-label="Close past runs">Close</button></div><p class="muted">Open a previous simulation to see its saved result.</p><label for="run-history">Choose a simulation</label><select id="run-history" disabled><option value="">Choose a run</option></select><p id="history-message" class="notice" role="status" hidden></p><button id="refresh-history" class="quiet-button" type="button">Refresh list</button></dialog>
 </body>
 </html>

@@ -1,8 +1,8 @@
 # 06 — Run simulations in the ChargeAssert app
 
-Choose settings, run a simulation and read its billing results on one page. The app uses the existing Lakeflow pipeline and the same saved evidence as the dashboard.
+Choose settings, run a simulation, then see its result. Counts, bills and run details open when you need them. The app uses the existing Lakeflow pipeline and the same saved evidence as the dashboard.
 
-![Local preview of the ChargeAssert app with controls, progress, billing decisions and session bills.](images/simulation-app-minimal-preview.jpg)
+![Local preview of the setup screen with billing mode, session count and Run simulation.](images/simulation-app-focused-setup.jpg)
 
 *Local preview with sample data. This is a UI check, not a live Databricks result.*
 
@@ -39,14 +39,20 @@ For later code updates, pull, validate and deploy the bundle, then run `simulati
 ## Try it
 
 1. Choose **Healthy bills** or **Deliberate overcharges**.
-2. Set the session count: **100** by default, from **1 to 1,000**. Open **Options & help** to change the seed (default **42**); the same seed repeats the usage values.
-3. Click **Run simulation**. Each new run gets a fresh batch name.
-4. Watch generation, ingestion and evaluation finish.
-5. Read the billing decision, check counts and session bills below the controls. **Run details** shows the run and evaluation IDs.
+2. Set the session count: **100** by default, from **1 to 1,000**. Open **Advanced settings** to change the seed (default **42**); the same seed repeats the usage values.
+3. Click **Run simulation**. Each new run gets a fresh batch name, and the app moves from setup to the result screen.
+4. Wait for the result to update automatically. Click **Review failed bills** or **View bills** to open the bill rows.
+5. Open **View check & run details** for check counts, billing verdicts, progress, IDs and links to the job and full dashboard.
 
 For 100 sessions, correct bills should give **1,400 passed checks** and all verdicts PASS. Deliberate overcharges add **EUR 0.87** to every candidate bill: expect **1,300 passed checks, 100 failed checks**, baseline PASS and candidate/overall FAIL.
 
-The recent-runs selector shows up to 20 runs of the same pipeline, including runs started outside the app. The **Open full dashboard** link opens the existing dashboard; use the evaluation ID shown in the app to select the same result there.
+**Past runs** opens a dialog with up to 20 runs, including runs started outside the app. **New simulation** returns to setup; it does not stop a run that is still working.
+
+The **Full dashboard** link is inside the run details. Use the evaluation ID shown there to select the same result in the dashboard.
+
+![Local sample result with one billing outcome and a button to review bills.](images/simulation-app-focused-result.jpg)
+
+*Local preview with sample data, not a live Databricks result.*
 
 ## What the status means
 
@@ -78,6 +84,7 @@ Open the local URL printed in the terminal. The preview is clearly labelled and 
 ```bash
 python -B -m unittest discover -s tests
 python -B scripts/build_app_assets.py --check
+node --test tests/test_simulation_outcome.js
 ```
 
 The interface uses plain HTML, CSS and JavaScript with system fonts. It adds no frontend framework or external font downloads.
