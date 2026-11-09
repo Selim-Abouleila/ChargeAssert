@@ -4,7 +4,7 @@
 
 A working MVP built with simulated charging data, **Databricks, Delta Lake, Auto Loader, Python and SQL**. It compares reported bills with what each session should cost, then saves a clear result and the evidence behind it.
 
-[Business value](#why-it-matters) · [Architecture](#architecture) · [Run the demo](#run-the-billing-demo) · [Project status](#current-status-and-next-steps)
+[Simulation app](docs/06-simulation-app.md) · [Business value](#why-it-matters) · [Architecture](#architecture) · [Run the demo](#run-the-billing-demo) · [Project status](#current-status-and-next-steps)
 
 ## Why it matters
 
@@ -152,9 +152,9 @@ The [ingestion walkthrough](docs/03-runbook.md#incremental-ocpp-file-ingestion) 
 
 ## Generate sessions and check their bills
 
-For controls and results on one page, use the [simulation app](docs/06-simulation-app.md). Choose a billing mode and session count, run the pipeline, then inspect its progress and saved results. The guide covers deployment.
+In the [simulation app](docs/06-simulation-app.md), choose **Deliberate overcharges** or **Healthy bills**, set the session count and click **Run simulation**. The next screen shows what happened. If charges differ, **Review failed bills** takes you straight to the affected bills and shows the expected and reported amounts.
 
-The [generated-session guide](docs/04-generated-sessions.md) covers this path from start to finish. Deployment also creates a [results dashboard](docs/05-dashboard.md): use the job's **Run now** button, then read the refreshed billing results without writing SQL.
+Use **Past runs** to revisit a simulation. The [dashboard](docs/05-dashboard.md) also shows saved results. For terminal commands and SQL, follow the [generated-session guide](docs/04-generated-sessions.md).
 
 After deployment, run the whole pipeline with its defaults: **100 simulated sessions**, seed `42` and deliberately incorrect candidate bills. It picks a new batch name automatically:
 
@@ -178,6 +178,7 @@ Open the parent run's `evaluate_generated_batch` child job and use the `executio
 
 ```bash
 python -B -m unittest discover -s tests -q
+node --test tests/test_simulation_outcome.js
 ```
 
 Local tests cover generation, validation, billing, verdicts, session coverage, saved results and dashboard queries and wiring. Install `app/requirements.txt` to include the app route tests. Some tests use substitutes for Databricks and Spark, so workspace checks are still needed for deployment, repeat runs and recovery.
@@ -186,9 +187,9 @@ Local tests cover generation, validation, billing, verdicts, session coverage, s
 
 This is a working portfolio MVP using simulated data and a flat energy rate. It does not process real payments or yet test real software release builds.
 
-**Confirmed in Databricks:** the original correct/wrong-amount examples, an execution with seven saved test results, and a generated Gold result with **2 sessions, 28 checks and all verdicts PASS**. The [generated-session guide](docs/04-generated-sessions.md#confirmed-result) records that result.
+**Confirmed in Databricks:** the fixed billing examples, a run with seven saved results, and a [healthy two-session run](docs/04-generated-sessions.md#confirmed-result) with all 28 checks passing. The [dashboard screenshot](docs/05-dashboard.md) shows the other outcome: the evaluation succeeded, but 100 deliberately overcharged bills failed their amount checks.
 
-**Still to check:** the dashboard deployment and refresh, the new parent workflow, the generated job's completion record, its deliberate-error test, stable repeat runs, recovery after interruption and the original missing-bill results.
+**Still to check in the workspace:** starting a run from the deployed app and reading its result, automatic dashboard refresh, repeat runs, recovery after interruption and the fixed missing-bill results. The screenshots in the app guide use local sample data.
 
 Next steps are to finish those checks, support more incoming data and billing cases, test real releases, and add GitHub release checks. Runtime, cost and throughput measurements are also planned. The [remaining-work list](docs/03-runbook.md#remaining-mvp-work) tracks the details.
 
@@ -200,9 +201,9 @@ Next steps are to finish those checks, support more incoming data and billing ca
 | [02 — Table guide](docs/02-tables.md) | What each table does and why it matters. |
 | [03 — Runbook](docs/03-runbook.md) | Setup, data rules, verification and remaining work. |
 | [04 — Generated-session guide](docs/04-generated-sessions.md) | Commands, expected results and a simple Gold query. |
-| [05 — Dashboard guide](docs/05-dashboard.md) | Run simulations and inspect bills through the Databricks UI. |
-| [06 — Simulation app](docs/06-simulation-app.md) | Choose settings, run simulations and read their results on one page. |
-| [databricks.yml](databricks.yml) and [resources/](resources/) | Bundle configuration, schemas, Volume, jobs and dashboard. |
+| [05 — Dashboard guide](docs/05-dashboard.md) | Find a saved evaluation and inspect its bills. |
+| [06 — Simulation app](docs/06-simulation-app.md) | Deploy the app, run a simulation and review failed bills. |
+| [databricks.yml](databricks.yml) and [resources/](resources/) | Bundle configuration for the schemas, Volume, jobs, app and dashboard. |
 | [sql/](sql/) | Table definitions, billing calculations and checks. |
 | [app/](app/) | The interactive simulation app. |
 | [notebooks/](notebooks/) | Session generation, mock billing, ingestion and execution tracking. |

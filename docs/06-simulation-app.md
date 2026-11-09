@@ -6,42 +6,46 @@ Choose settings, run a simulation, then see its result. Counts, bills and run de
 
 *Local preview with sample data. This is a UI check, not a live Databricks result.*
 
-## Deploy the first version
+## Deploy or update the app
 
-From your ChargeAssert Git folder in the Databricks terminal, run these commands one at a time:
+From your ChargeAssert Git folder in the Databricks terminal, pull the current version and deploy the bundle. You need the [workspace requirements](../README.md#requirements) and permission to create a Databricks App.
 
 ```bash
 git switch dev
 git pull --ff-only origin dev
 databricks bundle validate -t dev
 databricks bundle deploy -t dev
+```
+
+**New workspace only:** if no generated batch has run yet, run this small test first. It creates the result tables the app needs. Wait for it to finish.
+
+```bash
+databricks bundle run -t dev run_generated_pipeline --params session_count=2,candidate_mode=healthy
+```
+
+**First setup only:** give the app read access to those tables. Repeat this if the app or its result tables are recreated. Skip this step for a normal app update.
+
+```bash
 databricks bundle run -t dev setup_simulation_app
+```
+
+Then start the updated app and get its URL:
+
+```bash
 databricks bundle run -t dev simulation_app
 databricks bundle summary -t dev
 ```
 
 Open the **simulation_app** URL from the summary, or find **chargeassert-dev-simulation** through the **app switcher → Databricks Apps** in Databricks.
 
-- `deploy` creates the app resource, connects it to the jobs and warehouse, and uploads its code.
-- `setup_simulation_app` gives the app read access to the two saved-result tables. Run it once after the app is created, and again if those tables or the app are recreated. It does not change any data.
-- `simulation_app` starts the app and deploys its code to app compute. It does not start a simulation.
-
-You need permission to create apps and grant access to the catalog, schemas and result tables. The setup job grants only catalog/schema access and SELECT on `generated_job_execution` and `generated_execution_verdict`.
-
-**New workspace only:** if the setup job says the result tables are missing, create them by running the pipeline once, then repeat the setup and app commands:
-
-```bash
-databricks bundle run -t dev run_generated_pipeline --params session_count=2,candidate_mode=healthy
-```
-
-For later code updates, pull, validate and deploy the bundle, then run `simulation_app` again.
+Starting the app does not start a simulation. The first setup needs permission to grant catalog and schema access and SELECT on `generated_job_execution` and `generated_execution_verdict`.
 
 ## Try it
 
 1. Choose **Healthy bills** or **Deliberate overcharges**.
 2. Set the session count: **100** by default, from **1 to 1,000**. Open **Advanced settings** to change the seed (default **42**); the same seed repeats the usage values.
 3. Click **Run simulation**. Each new run gets a fresh batch name, and the app moves from setup to the result screen.
-4. Wait for the result to update automatically. Click **Review failed bills** or **View bills** to open the bill rows.
+4. Wait for the result to update automatically. **Billing differences found** → **Review failed bills** shows only failed bills. **All billing checks passed** → **View bills** shows both versions. Each row gives the expected charge, the reported charge and the difference.
 5. Open **View check & run details** for check counts, billing verdicts, progress, IDs and links to the job and full dashboard.
 
 For 100 sessions, correct bills should give **1,400 passed checks** and all verdicts PASS. Deliberate overcharges add **EUR 0.87** to every candidate bill: expect **1,300 passed checks, 100 failed checks**, baseline PASS and candidate/overall FAIL.
@@ -60,7 +64,7 @@ The **Full dashboard** link is inside the run details. Use the evaluation ID sho
 
 The app resolves the selected parent run to its actual evaluator child run. It never substitutes the newest result from another simulation. Missing or inconsistent evidence stays blocked. Failure before evaluation produces no billing result. If dashboard refresh fails after evaluation, the app can still show saved billing evidence alongside the failed pipeline status.
 
-Start a new full simulation after a failure; repaired attempts are not shown as trusted results. Progress refreshes automatically while the selected run is active. Saved results load after completion and can be refreshed manually. The SQL warehouse may take time to start; retry loading results if it was unavailable.
+If the app cannot confirm that a run started, choose **Retry start request**. It reuses the original request to avoid starting two jobs. If only the results failed to load, **Try again** reads the same run. Start a new simulation if the pipeline itself failed; repaired attempts do not have a trusted result in this app.
 
 ## Access and running costs
 

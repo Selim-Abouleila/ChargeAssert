@@ -1,6 +1,6 @@
 # 05 — Run ChargeAssert and read the results in Databricks
 
-The bundle creates the job and a published dashboard. After deployment, you can start simulations with **Run now** and read the results without writing SQL.
+Use this dashboard to review saved billing checks without writing SQL. To launch a simulation, use the [ChargeAssert app](06-simulation-app.md) or the Lakeflow job below.
 
 ![ChargeAssert dashboard showing 100 sessions, 1,300 passed checks, 100 failed checks, no blocked checks and a successful evaluation.](images/generated-billing-dashboard-2026-10-15.png)
 
@@ -27,8 +27,6 @@ The bundle creates and publishes the dashboard automatically, using the existing
 
 ## Run a simulation
 
-To choose settings and see results on one page, use the [simulation app](06-simulation-app.md). The dashboard remains available for reviewing saved results.
-
 Open **Jobs & Pipelines**, select `chargeassert_dev_run_generated_pipeline` and click **Run now**. The defaults create 100 sessions with deliberately incorrect candidate bills. The dropdown beside Run now lets you change `session_count`, `seed` or `candidate_mode`.
 
 You can also start the same job from the terminal:
@@ -41,11 +39,10 @@ Generation and ingestion run first. The evaluation job then checks the bills and
 
 ## Read the dashboard
 
-Open the dashboard from the bundle summary or the Databricks dashboard list.
+Open the dashboard from the bundle summary or the Databricks dashboard list. From the app, open **View check & run details**, note the **Evaluation** ID, then click **Full dashboard**. Set the dashboard's **Evaluation** filter to that ID so you're reading the same run.
 
 - **Overview:** session and check counts, baseline and candidate billing verdicts, evaluation status, batch name, time and any failure reason.
 - **Session bills:** expected and actual charges, their difference, and the checks for each session and billing version.
-- **Execution selector:** choose `latest` for the newest evaluation attempt, or select a specific execution ID. Both pages use the same selection.
 
 With the defaults, expect **100 sessions, 1,400 checks, 1,300 PASS and 100 FAIL**. Baseline billing passes; candidate and overall billing fail because each candidate bill is EUR 0.87 too high. The job should still succeed: it caught and saved the intended errors.
 
@@ -55,7 +52,7 @@ Choose `candidate_mode=healthy` for correct bills. With 100 sessions, all 1,400 
 
 The evaluation notebook saves its execution ID as a task value, and the refresh task uses that exact ID. Refresh runs when evaluation completes successfully, even when its billing verdict is FAIL. A processing error skips automatic refresh and keeps the job failed. In that case, refresh the dashboard manually and select the failed attempt. Missing, failed or incomplete evaluations show **BLOCKED**, with empty financial counts rather than an older passing result. Saved session details come from that attempt's immutable snapshot.
 
-The dashboard's default `latest` means **latest evaluation**, including failed attempts. A later evaluation may have started since your job ran; select your exact execution ID to inspect that attempt. Find it in the evaluation notebook output or in the refresh task's filter value. Select an exact ID when comparing pages during active runs; `latest` is resolved separately by each dataset.
+The default `latest` means the newest evaluation attempt, including failed ones. It can change while you browse. Selecting an exact ID keeps **Overview** and **Session bills** on the same attempt. If you started the job outside the app, the ID is also in the evaluation notebook output.
 
 The evaluation status does not cover the earlier generation and ingestion steps. Those can fail before an evaluator record exists. Check the parent job's status in **Jobs & Pipelines** for the outcome of the whole pipeline. If dashboard refresh itself fails, the job reports that failure; saved billing evidence remains available.
 

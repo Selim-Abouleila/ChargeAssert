@@ -2,7 +2,7 @@
 
 This test creates simulated charging sessions and checks their bills from the incoming files through Gold. It shows whether correct bills pass and incorrect bills are caught.
 
-Each command runs once and stops. Nothing runs continuously.
+For a run without terminal commands, use the [simulation app](06-simulation-app.md). Choose a billing mode and session count, then click **Run simulation**. This starts the same `run_generated_pipeline` job shown below. Each run stops when its batch is finished.
 
 ## 1. Update and deploy
 
@@ -66,9 +66,9 @@ The separate commands still work. `combined_ingestion` creates and loads a batch
 
 ## 3. Read the results
 
-For normal runs, you can use **Jobs & Pipelines → chargeassert_dev_run_generated_pipeline → Run now**. Its evaluator refreshes the results dashboard after checking the bills. Open **ChargeAssert - Generated billing results (dev)** to inspect the summary and session bills. The [dashboard guide](05-dashboard.md) explains the execution selector and what each status means.
+In the app, the result appears automatically. **Review failed bills** shows the bills that need attention. Open **View check & run details** for counts, billing verdicts and the evaluation ID. **Past runs** also includes runs started from Jobs or the CLI.
 
-The SQL below remains available for direct checks.
+If you used **Jobs & Pipelines → chargeassert_dev_run_generated_pipeline → Run now**, the evaluator refreshes the [dashboard](05-dashboard.md) after it saves the bills. Select the same evaluation ID there to inspect that run. For a direct Gold check, use the SQL below.
 
 The evaluation job creates `generated_execution_verdict` when it starts. After it finishes, run this in the Databricks SQL editor:
 
@@ -97,6 +97,6 @@ The SQL output shared on **2026-10-04** showed:
 | Checks | 28 |
 | Baseline / candidate / overall | PASS / PASS / PASS |
 
-This confirms the saved healthy Gold result from the separate-job flow. The parent workflow with the new 100-session default, matching job completion record, deliberate-error test, repeat runs and failure recovery still need checking in Databricks.
+This confirms the healthy Gold result from the separate-job flow. On **2026-10-15**, the [live dashboard](05-dashboard.md) also showed a successful evaluation of 100 sessions in `amount_error` mode: **1,300 passed, 100 failed and 0 blocked**, with baseline PASS and candidate/overall FAIL. That screenshot verifies the saved evaluation; it does not show whether the parent job and automatic refresh finished. Live app access, same-batch reruns and failure recovery still need checking.
 
 See the [table guide](02-tables.md) for what each table does and the [runbook](03-runbook.md#evaluate-generated-batches-through-gold) for detailed rules and limits.

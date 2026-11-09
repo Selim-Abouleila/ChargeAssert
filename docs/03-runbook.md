@@ -28,14 +28,15 @@ The following results have been confirmed in Databricks:
 - On 2026-09-20, the bad and corrected fixed-response tests were confirmed.
 - On 2026-09-21, the Python-generated amount tests were confirmed. `mock-amount-bad-v1` has a passing baseline, a failing candidate and overall FAIL, with 13 passing / 1 failing checks. `mock-amount-fixed-v1` has PASS for both releases and overall, with 14 passing / 0 failing checks.
 - Execution `192226331898541:436138745571440:0`, started on 2026-09-23, was confirmed as `SUCCEEDED`, with seven saved result snapshots for seven distinct scenarios. Earlier failed attempts remain `FAILED` with no snapshots.
+- On 2026-10-04, a [generated Gold result](04-generated-sessions.md#confirmed-result) showed two healthy sessions and 28 passing checks. On 2026-10-15, the [live dashboard](05-dashboard.md) showed a successful evaluation of 100 sessions: 1,300 checks passed, 100 failed and none were blocked. The deliberately overcharging candidate failed as expected.
 
-The successful execution confirms that the original result capture works after the Spark filter fix. The exact financial values in those snapshots and the deliberate failure test before Gold still need checking. On 2026-10-04, a [generated Gold result](04-generated-sessions.md#confirmed-result) was also confirmed: two sessions, 28 checks and all three verdicts PASS. Its job completion record, deliberate-error test, repeat runs and recovery still need checking.
+The dashboard confirms the evaluator's result. Live checks of the app, the full parent run, automatic refresh, repeat runs and recovery are still pending.
 
 The job keeps three runs with fixed responses (`smoke-run-v1`, `amount-bad-v1`, `amount-fixed-v1`) and four runs whose responses are calculated by the mock (`mock-amount-bad-v1`, `mock-amount-fixed-v1`, `mock-missing-cdr-bad-v1`, `mock-missing-cdr-fixed-v1`). Each uses one session (`txn-smoke-v1`), the same three OCPP-shaped charging events and one EUR energy tariff. A CDR, or charge detail record, is the billing record returned for a session.
 
 The Python mock calculates the reported charge from the raw meter events and tariff. Silver SQL calculates the expected charge separately; this independent calculation is called the **oracle**. The bad amount candidates report EUR 6.50; healthy responses report EUR 5.63. The bad missing-CDR candidate returns no billing record. Every other run has one baseline and one candidate CDR. These are small synthetic tests; the complete release gate and six-scenario suite are still planned.
 
-The billing mock runs once when its job is started and then exits. The separate session generator does the same: it creates one file containing a batch of events on request. There is no schedule, continuous loop, HTTP server or background service.
+The billing mock runs once when its job is started and then exits. The separate session generator does the same: it creates one file containing a batch of events on request. Neither job runs on a schedule. The optional simulation app stays available until stopped, but starts a job only on request.
 
 A scenario's `run_id` identifies its saved test inputs and outputs. An `execution_id` identifies one Databricks job attempt that checks them. Every full job run gets its own audit record and result snapshots. Always query the exact execution you want to check. An old PASS in `release_verdict` cannot show that a newer failed or unfinished execution passed.
 
@@ -336,7 +337,9 @@ The `evaluate_generated_batch` job completes the path from landed events to bill
 
 Its two job parameters are `batch_id` (default `sessions-repaired-001`) and `candidate_mode` (`healthy` by default, or `amount_error`). It allows one run at a time and stops when the batch is finished. It does not schedule more work or modify the source files, landing rows or Auto Loader checkpoint.
 
-For the short test guide, simple Gold query and recorded result, see [Generated sessions](04-generated-sessions.md). To run and inspect results through the Databricks UI, use the [dashboard guide](05-dashboard.md). The bundle publishes the dashboard and adds an `ALL_SUCCESS` refresh task to the evaluator. It reads the exact saved execution ID from the evaluation task value. A billing FAIL still refreshes; an evaluation processing error skips refresh and keeps the job failed. Refresh the dashboard manually to inspect those failed attempts. Dashboard status covers that evaluation; the parent job remains the source for generation and ingestion failures.
+For terminal commands and Gold checks, see the [generated-session guide](04-generated-sessions.md). The [simulation app](06-simulation-app.md) starts the same parent job and shows its result. To investigate, open **View check & run details** for the parent run and its evaluator ID. If generation or ingestion failed, there is no new billing result.
+
+The [dashboard](05-dashboard.md) reads saved evaluations. Its refresh task uses the exact execution ID after a successful evaluation, even if the bills failed. A processing error skips the refresh; refresh manually and select the failed attempt if it has an evaluation record.
 
 `run_generated_pipeline` is the parent job for the full flow. It calls `generate_sessions`, then `ingest_ocpp_files`, then `evaluate_generated_batch`, using [Run Job tasks](https://docs.databricks.com/aws/en/jobs/tasks/run-job). Both downstream steps require `ALL_SUCCESS`. It forwards `batch_id`, `session_count` and `seed` to generation, and the same `batch_id` plus `candidate_mode` to evaluation. It reuses the existing child jobs and their concurrency limits; it does not start a second checkpoint writer.
 
@@ -456,7 +459,7 @@ Do not delete files, reset checkpoints, drop tables or overwrite earlier billing
 
 This version checks one bounded batch of up to 1,000 synthetic sessions, with at most 10,000 received lines including copies. It still uses mock billing, a flat EUR energy tariff and the supported final-CDR subset. Structured quarantine, arbitrary input schemas, late-event policies, external release replay and recovery after interrupted writes need further work. Separate generated tables and single-run jobs do not stop manual or external writes to those tables.
 
-Local tests cover generation, validation, rounding, independent SQL comparisons, result capture and failure handling. The two-session healthy Gold result is confirmed in Databricks. Its job completion record, deliberate-error result, healthy rerun, stable counts and recovery after interruption still need checking.
+Local tests cover generation, validation, rounding, billing comparisons, saved results and failure handling. The [recorded workspace results](04-generated-sessions.md#confirmed-result) include a healthy batch and a deliberately overcharged batch. The healthy batch's receipt, same-batch reruns, stable counts and recovery after interruption still need checking.
 
 ## Silver — produce trusted business records
 
@@ -523,7 +526,7 @@ Silver can store several periods for a tariff. The current Bronze fixture merge 
 
 ### Local checks and their limits
 
-Run the local regression checks with:
+For the app dependencies, local preview and browser outcome tests, see [the app guide](06-simulation-app.md#local-preview-and-checks). Run the Python regression checks with:
 
 ```powershell
 python -B -m unittest discover -s tests -v
@@ -1062,14 +1065,14 @@ The items below separate what already works from what still needs to be built or
 | Replay and deliberate faults | Wrong-amount and missing-CDR mock pairs already use identical inputs; the missing-CDR results still need direct workspace verification. Add duplicate charges and the other required cases, then replay inputs against external releases over HTTP. Record events and retry attempts so the first difference can be found. Current mocks do not run real software release builds. |
 | Session validation | Generated batches now check declared identities, complete event sequences, timestamps and nondecreasing Wh readings before billing. Broaden support for other meter measurements, units/multipliers, resets and external station/session identities. Define late, missing and conflicting-event policies beyond the bounded synthetic contract. |
 | Tariff selection | Generated sessions now have explicit session/tariff links; the original seven mappings remain fixed. Add multiple tariff periods in Bronze and pricing across tariff boundaries. Extend pricing rules only when a scenario needs them. |
-| Independent expected charge | The independent SQL calculation now covers every registered session in the selected generated batch, as well as the original fixtures. The healthy two-session Gold result is confirmed. Check deliberate errors and broaden supported scenarios, tariffs and meter formats while keeping the calculation separate from Python billing mocks. |
+| Independent expected charge | The independent SQL calculation now covers every registered session in the selected generated batch, as well as the original fixtures. The healthy two-session Gold result is confirmed. Check bad and corrected bills on the same batch, then broaden supported scenarios, tariffs and meter formats while keeping the calculation separate from Python billing mocks. |
 | Reported billing records | Read responses from external release tests and support more than the current final-CDR fields. Parsing, removal of equivalent copies and rejection of conflicting records already work. Still needed: Gold results for those conflicts, broader Session/CDR support and a general mapping between session IDs. Keep the original saved responses as regression test evidence. |
 | Billing checks | The original healthy 14-check result and a generated two-session Gold result with 28 checks are confirmed in Databricks. Local tests also cover failures in the expected calculation, CDR count, energy, duration, currency, tariff ID and amount. Add direct baseline-versus-candidate checks, tariff-version evidence, checks that retries and late events do not change the correct result, and clear reports for failures in earlier tasks. |
 | Verdicts and evidence | The original successful seven-snapshot execution is confirmed; inspect its financial snapshots and complete the A/B/C failure test. Generated capture now checks a complete session inventory and binds input/code hashes to an exact attempt. One healthy generated Gold result is confirmed; check its completion receipt and prove snapshots stay unchanged after reruns. Full source/Silver versioning, protection from unrelated writers, first-difference traces and business exposure summaries remain. |
 | Estimated financial impact | Calculate the change in defect rate × assumed monthly sessions × assumed impact per affected session. Show every assumption and separate customer overcharges from potentially unbilled revenue. Label these numbers as estimates, never actual losses or proven savings. |
 | GitHub automation | Add GitHub Actions that authenticate to Databricks, run the checks, retrieve the exact execution/scenario result and publish PASS/FAIL with evidence links. Configure that check as required for release approval. Require a successful Databricks job, a successful execution record and a passing snapshot; never use an older success instead. |
 | Verification and demo | The generated healthy Gold result is confirmed: two sessions, 28 checks and all verdicts PASS. Confirm its completion receipt, then test 26 PASS / 2 FAIL with amount_error and a fresh healthy execution with 28 PASS. Check stable session counts and unchanged older snapshots. Also finish generated ingestion 6 → 6, sample files 3 → 3 → 6 → 6, missing-CDR snapshot checks, A/B/C failure and interrupted-run recovery. The PDF examples of 50,000 sessions and EUR 24,380 are not measured results. |
-| Runtime access | Add explicit permissions when introducing a separate CI or runtime identity. Current development relies on schema ownership. |
+| Runtime access | The app has scoped job, warehouse and result-table access. Define grants separately for any new CI or job identity. |
 
 ### Six flagship scenarios
 
@@ -1094,7 +1097,7 @@ The MVP does not include real card payments; bank, payment-provider (PSP), ERP o
 ## Permissions status
 
 - The deployment user was previously recorded as owning all three schemas. Check current permissions when deploying as another identity.
-- The bundle does not yet grant access to another user, group, service principal or CI identity.
+- The bundle gives the app's service principal access to start the parent job, view the evaluator and use the SQL warehouse. The [app setup job](../notebooks/setup_simulation_app.py) grants catalog and schema access and read access to two tables: Bronze `generated_job_execution` and Gold `generated_execution_verdict`. Sharing the app with users is separate; see the [app guide](06-simulation-app.md#access-and-running-costs).
 - A separate identity running the jobs needs `USE CATALOG` on `workspace`, plus `USE SCHEMA` and `CREATE TABLE` on the relevant schemas. It also needs `SELECT` and `MODIFY` on tables it reads or writes without owning them, and access to the job, SQL warehouse and serverless notebook/job compute.
 - Creating the managed ingestion Volume needs `CREATE VOLUME` on the Bronze schema. A separate publisher or ingestion identity also needs `READ VOLUME` and `WRITE VOLUME` on `workspace.chargeassert_dev_bronze.ocpp_ingestion` for source files and checkpoints, along with catalog and schema access.
 - An identity that only reads tables, including the landing table, needs `USE CATALOG`, `USE SCHEMA` and `SELECT`. It does not need direct Volume access to read landed rows.
