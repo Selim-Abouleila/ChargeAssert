@@ -1,4 +1,4 @@
-# 01 — ChargeAssert table guide
+# 02 — ChargeAssert table guide
 
 **ChargeAssert uses charging data to catch wrong bills and potentially unbilled sessions before a software release.**
 
@@ -17,7 +17,7 @@ The **baseline** is the reference billing behavior; the **candidate** is the beh
 | `ocpp_transaction_events_raw` | `generated_ocpp_transaction_events_raw` | Keeps original charging events, timestamps and meter readings. |
 | `tariffs_raw` | `generated_tariffs_raw` | Keeps the source tariff and its validity period. |
 | `ocpi_cdrs_raw` | `generated_ocpi_cdrs_raw` | Keeps the baseline and candidate billing records separately. A CDR is a charge detail record. |
-| `job_execution` | `generated_job_execution` | Records one job attempt, its completion status and any failure reason. |
+| `job_execution` | `generated_job_execution` | Records whether a billing evaluation finished and why. The generated table tracks the evaluation, not the whole simulation. |
 | `ocpp_events_landing` | Shared input | Keeps file lines, source details and hashes from Auto Loader. |
 
 The session generator writes three charging events per session. Auto Loader saves them in the landing table. The generated evaluator then validates the selected batch, checks that every declared session is complete, and runs Python mocks to produce both sets of billing records. It does not accept incomplete records from the earlier mixed event/tariff/CDR files; those files stay preserved for investigation.
@@ -41,7 +41,9 @@ The expected calculation uses decimal arithmetic and rounds the session total HA
 | `release_verdict` | `generated_release_verdict` | Gives the current billing decision, with counts and a reason. |
 | `execution_verdict` | `generated_execution_verdict` | Saves complete checks and a verdict for one exact job attempt. Later runs do not overwrite these snapshots. |
 
-Gold helps billing teams see overcharges, operations teams find potentially unbilled sessions, and release owners investigate a change with evidence. A successful job means the checks ran and the evidence was saved. It can still contain **financial FAIL** results. A missing, failed or incomplete attempt must return **BLOCKED**, without borrowing an older PASS.
+Gold helps billing teams see overcharges and find potentially unbilled sessions. A successful evaluation can still report **FAIL**: the checks ran and found a billing problem.
+
+The [simulation app](06-simulation-app.md) and [dashboard](05-dashboard.md) read two existing tables for generated sessions. Bronze’s `generated_job_execution` tells them whether the evaluation finished. Gold’s `generated_execution_verdict` holds the verdict and the checks behind each bill. They match both records by `execution_id`. If the evidence is missing or inconsistent, they withhold the billing result instead of showing an older PASS.
 
 ## What the demos show
 
@@ -58,11 +60,11 @@ For the same batch, both modes use the same charging inputs and keep separate re
 
 ## Current status and commands
 
-The original amount examples and a completed execution with seven snapshots have been verified in Databricks. A [generated Gold result](03-generated-sessions.md#confirmed-result) now confirms two sessions, 28 checks and PASS for both billing versions and overall. Its job completion record, deliberate-error test, repeat runs and failure recovery still need checking. Real release replay and automated GitHub checks remain planned.
+The [generated-session guide](04-generated-sessions.md#confirmed-result) records a healthy two-session result with 28 passing checks. The [dashboard example](05-dashboard.md) shows the other case: evaluation succeeded, but 100 deliberate overcharges failed their checks.
 
-There are seven manual jobs: `create_tables`, `publish_ingestion_demo`, `generate_sessions`, `ingest_ocpp_files`, `combined_ingestion`, `evaluate_generated_batch` and `run_generated_pipeline`. The last one runs generation, ingestion and evaluation in order with one command. It picks a new batch name and defaults to 100 sessions, seed `42` and `amount_error`; you can change the count, seed and candidate mode. The bundle also publishes a [results dashboard](04-dashboard.md), refreshed after evaluation. It adds no tables. Each job stops when its work finishes.
+`run_generated_pipeline` generates the sessions, loads their events and checks the bills. Starting it from the app uses the same tables as starting it from the terminal. The separate `setup_simulation_app` job grants read access to the two result tables; it creates no tables.
 
-- [Original MVP brief](OVERVIEW.pdf) — the business problem and target scope.
-- [Full runbook](02-runbook.md) — table rules, field definitions, limitations and remaining work.
-- [Deploy the fixed demo](02-runbook.md#billing-regression-job-and-deployment) · [Check its execution](02-runbook.md#check-the-requested-execution).
-- [Generate sessions and check Gold](03-generated-sessions.md) · [File-ingestion demo](02-runbook.md#incremental-ocpp-file-ingestion).
+- [Original MVP brief](01-mvp-brief.pdf) — the business problem and target scope.
+- [Full runbook](03-runbook.md) — table rules, field definitions, limitations and remaining work.
+- [Deploy the fixed demo](03-runbook.md#billing-regression-job-and-deployment) · [Check its execution](03-runbook.md#check-the-requested-execution).
+- [Generate sessions and check Gold](04-generated-sessions.md) · [File-ingestion demo](03-runbook.md#incremental-ocpp-file-ingestion).
