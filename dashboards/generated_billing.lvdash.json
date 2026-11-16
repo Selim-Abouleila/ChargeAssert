@@ -265,6 +265,22 @@
       "layout": [
         {
           "widget": {
+            "name": "brand_logo",
+            "multilineTextboxSpec": {
+              "lines": [
+                "![ChargeAssert](https://raw.githubusercontent.com/Selim-Abouleila/ChargeAssert/dev/docs/images/chargeassert-logo.png)"
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 3,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
             "name": "overview_header",
             "multilineTextboxSpec": {
               "lines": [
@@ -274,9 +290,9 @@
             }
           },
           "position": {
-            "x": 0,
+            "x": 3,
             "y": 0,
-            "width": 12,
+            "width": 9,
             "height": 2
           }
         },
